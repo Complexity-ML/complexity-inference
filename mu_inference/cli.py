@@ -211,11 +211,10 @@ def generate_main():
 
     # Build config
     mu_config = MuConfig(enabled=args.mu_enabled)
-    model_config = ModelConfig(dtype=args.dtype)
     engine_config = EngineConfig(
-        model=model_config,
         mu=mu_config,
         device=args.device,
+        dtype=args.dtype,
     )
 
     sampling_params = SamplingParams(
@@ -311,9 +310,9 @@ def bench_main():
 
     # Config
     engine_config = EngineConfig(
-        model=ModelConfig(dtype=args.dtype),
         mu=MuConfig(enabled=True),
         device=args.device,
+        dtype=args.dtype,
     )
 
     sampling_params = SamplingParams(
