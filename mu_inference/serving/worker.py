@@ -57,7 +57,7 @@ class MuWorker:
     ):
         self.config = config
         self.device = device
-        self.dtype = self._get_dtype(config.model.dtype)
+        self.dtype = self._get_dtype(config.dtype)
 
         # Model and cache
         self.model: Optional[MuModelBase] = None
