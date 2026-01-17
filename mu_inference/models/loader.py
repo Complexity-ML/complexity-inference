@@ -221,19 +221,13 @@ def map_weight_names(
     for key, tensor in state_dict.items():
         new_key = key
 
-        # Apply prefix mappings
+        # Apply prefix mappings (remove 'model.' prefix)
         for old_prefix, new_prefix in prefix_maps:
             if new_key.startswith(old_prefix):
                 new_key = new_prefix + new_key[len(old_prefix):]
+                break
 
-        # Handle layer patterns
-        # e.g., layers.0.self_attn.q_proj.weight
-        parts = new_key.split(".")
-        for i, part in enumerate(parts):
-            if part in name_maps:
-                parts[i] = name_maps[part]
-
-        new_key = ".".join(parts)
+        # At this point: model.layers.0.self_attn.q_proj.weight -> layers.0.self_attn.q_proj.weight
 
         # Check if key exists in model
         if new_key in model_keys:
@@ -241,8 +235,8 @@ def map_weight_names(
         elif key in model_keys:
             mapped[key] = tensor
         else:
-            # Try original key
-            mapped[key] = tensor
+            # Store with mapped name even if not in model (for debugging)
+            mapped[new_key] = tensor
 
     return mapped
 
