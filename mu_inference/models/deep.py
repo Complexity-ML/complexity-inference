@@ -297,7 +297,7 @@ class DeepForCausalLM(MuModelBase):
 
         output = MuModelOutput(
             logits=logits,
-            hidden_states=hidden_states if self.config.output_hidden_states else None,
+            hidden_states=hidden_states if getattr(self.config, 'output_hidden_states', False) else None,
             mu_stats=mu_stats,
         )
 

@@ -237,7 +237,7 @@ class LlamaForCausalLM(MuModelBase):
 
         output = MuModelOutput(
             logits=logits,
-            hidden_states=hidden_states if self.config.output_hidden_states else None,
+            hidden_states=hidden_states if getattr(self.config, 'output_hidden_states', False) else None,
             mu_stats=self.get_mu_stats() if self.mu_dynamics else None,
         )
 
