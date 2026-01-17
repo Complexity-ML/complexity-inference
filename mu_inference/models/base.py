@@ -65,7 +65,18 @@ class MuModelBase(ABC, nn.Module):
         self.mu_config = mu_config or MuConfig()
 
         # Mu dynamics tracker
-        self.mu_dynamics = MuDynamics(self.mu_config) if self.mu_config.enabled else None
+        if self.mu_config.enabled:
+            self.mu_dynamics = MuDynamics(
+                mu=self.mu_config.mu,
+                clamp_min=self.mu_config.clamp_min,
+                clamp_max=self.mu_config.clamp_max,
+                velocity_min=self.mu_config.velocity_min,
+                velocity_max=self.mu_config.velocity_max,
+                beta=self.mu_config.beta,
+                ema_alpha=self.mu_config.ema_alpha,
+            )
+        else:
+            self.mu_dynamics = None
 
         # Model metadata
         self._is_initialized = False
