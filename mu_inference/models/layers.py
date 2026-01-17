@@ -435,12 +435,13 @@ class MuTokenRoutedMLP(nn.Module):
 
 class MuAttention(nn.Module):
     """
-    Multi-Head Attention with Mu dynamics.
+    Multi-Head Attention with Mu dynamics and Mu-guided attention.
 
     Features:
     - Grouped Query Attention (GQA) support
-    - Optional QK normalization
+    - QK normalization (using nn.RMSNorm for checkpoint compatibility)
     - RoPE integration
+    - Mu-guided attention (mu_to_q, mu_to_k, mu_to_v projections)
     - Mu-clamping on attention output
     - Uses PyTorch's scaled_dot_product_attention (FlashAttention when available)
     """
@@ -461,7 +462,7 @@ class MuAttention(nn.Module):
         self.num_heads = num_attention_heads
         self.num_kv_heads = num_kv_heads or num_attention_heads
         self.head_dim = head_dim or (hidden_size // num_attention_heads)
-        self.qk_norm = qk_norm
+        self.use_qk_norm = qk_norm
         self.mu_config = mu_config
 
         # Number of Q heads per KV head (for GQA)
@@ -473,10 +474,16 @@ class MuAttention(nn.Module):
         self.v_proj = nn.Linear(hidden_size, self.num_kv_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, hidden_size, bias=False)
 
-        # QK normalization (optional)
+        # Mu-guided attention projections (INL 2025)
+        # mu from previous layer biases Q, K, and V
+        self.mu_to_q = nn.Linear(hidden_size, self.num_heads * self.head_dim, bias=False)
+        self.mu_to_k = nn.Linear(hidden_size, self.num_kv_heads * self.head_dim, bias=False)
+        self.mu_to_v = nn.Linear(hidden_size, self.num_kv_heads * self.head_dim, bias=False)
+
+        # QK normalization (using nn.RMSNorm for checkpoint compatibility)
         if qk_norm:
-            self.q_norm = MuRMSNorm(self.head_dim, mu_config=mu_config)
-            self.k_norm = MuRMSNorm(self.head_dim, mu_config=mu_config)
+            self.q_norm = nn.RMSNorm(self.head_dim, eps=1e-6)
+            self.k_norm = nn.RMSNorm(self.head_dim, eps=1e-6)
 
         # RoPE
         self.rotary_emb = MuRotaryEmbedding(
@@ -519,7 +526,7 @@ class MuAttention(nn.Module):
         v = v.view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
 
         # Apply QK normalization
-        if self.qk_norm:
+        if self.use_qk_norm:
             q = self.q_norm(q)
             k = self.k_norm(k)
 
