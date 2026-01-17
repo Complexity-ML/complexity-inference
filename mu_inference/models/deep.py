@@ -68,7 +68,7 @@ class DeepDecoderLayer(nn.Module):
             head_dim=config.head_dim,
             max_position_embeddings=config.max_position_embeddings,
             rope_base=config.rope_theta,
-            qk_norm=config.qk_norm,
+            qk_norm=getattr(config, 'use_qk_norm', False),
             mu_config=mu_config,
         )
 
