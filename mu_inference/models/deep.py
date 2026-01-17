@@ -114,7 +114,8 @@ class DeepDecoderLayer(nn.Module):
         use_cache: bool = True,
         token_ids: Optional[torch.Tensor] = None,
         velocity_states: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]], torch.Tensor]:
+        mu_prev: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]], torch.Tensor, torch.Tensor]:
         """
         Forward pass through the layer.
 
@@ -126,13 +127,13 @@ class DeepDecoderLayer(nn.Module):
             use_cache: Whether to return updated cache
             token_ids: Token IDs for routing (if using Token-Routed MLP)
             velocity_states: Velocity for INL dynamics
+            mu_prev: Mu from previous layer (guides attention)
 
         Returns:
-            (output_hidden_states, updated_cache, velocity_states)
+            (output_hidden_states, updated_cache, velocity_states, mu_current)
         """
+        # === 1. MU-GUIDED ATTENTION ===
         residual = hidden_states
-
-        # Pre-norm + Attention
         hidden_states = self.input_layernorm(hidden_states)
         attn_output, new_cache = self.self_attn(
             hidden_states,
@@ -140,14 +141,15 @@ class DeepDecoderLayer(nn.Module):
             attention_mask=attention_mask,
             past_key_value=past_key_value,
             use_cache=use_cache,
+            mu_prev=mu_prev,  # Pass mu to guide attention
         )
 
-        # INL Dynamics (after attention, before residual)
-        hidden_states, velocity_states, _ = self.dynamics(attn_output, velocity_states)
+        # === 2. INL DYNAMICS ===
+        hidden_states, velocity_states, mu_current = self.dynamics(attn_output, velocity_states)
 
         hidden_states = residual + hidden_states
 
-        # Pre-norm + MLP
+        # === 3. MLP ===
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
 
@@ -167,7 +169,7 @@ class DeepDecoderLayer(nn.Module):
                 self.mu_config.clamp_max,
             )
 
-        return hidden_states, new_cache, velocity_states
+        return hidden_states, new_cache, velocity_states, mu_current
 
 
 @register_model("deep")
@@ -285,11 +287,12 @@ class DeepForCausalLM(MuModelBase):
         # Process through layers
         new_key_values = [] if use_cache else None
         velocity_states = None  # Track velocity across layers
+        mu_prev = None  # Track mu across layers (INL innovation)
 
         for layer_idx, layer in enumerate(self.layers):
             past_kv = past_key_values[layer_idx] if past_key_values else None
 
-            hidden_states, new_kv, velocity_states = layer(
+            hidden_states, new_kv, velocity_states, mu_current = layer(
                 hidden_states,
                 position_ids=position_ids,
                 attention_mask=attention_mask,
@@ -297,7 +300,11 @@ class DeepForCausalLM(MuModelBase):
                 use_cache=use_cache,
                 token_ids=input_ids,  # For Token-Routed MLP
                 velocity_states=velocity_states,
+                mu_prev=mu_prev,  # Pass mu from previous layer
             )
+
+            # Propagate mu to next layer
+            mu_prev = mu_current
 
             if use_cache:
                 new_key_values.append(new_kv)

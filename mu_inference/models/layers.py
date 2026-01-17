@@ -499,9 +499,10 @@ class MuAttention(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         use_cache: bool = True,
+        mu_prev: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         """
-        Forward pass.
+        Forward pass with Mu-guided attention.
 
         Args:
             hidden_states: [batch, seq, hidden]
@@ -509,6 +510,7 @@ class MuAttention(nn.Module):
             attention_mask: [batch, 1, seq, seq] or None
             past_key_value: Cached (K, V) or None
             use_cache: Whether to return updated cache
+            mu_prev: Mu from previous layer (guides Q, K, V)
 
         Returns:
             (output, updated_cache)
@@ -519,6 +521,12 @@ class MuAttention(nn.Module):
         q = self.q_proj(hidden_states)
         k = self.k_proj(hidden_states)
         v = self.v_proj(hidden_states)
+
+        # Mu-guided attention: mu from previous layer biases Q, K, V
+        if mu_prev is not None:
+            q = q + self.mu_to_q(mu_prev)
+            k = k + self.mu_to_k(mu_prev)
+            v = v + self.mu_to_v(mu_prev)
 
         # Reshape: [batch, seq, heads, head_dim]
         q = q.view(batch_size, seq_len, self.num_heads, self.head_dim)
