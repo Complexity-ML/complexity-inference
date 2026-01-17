@@ -121,7 +121,6 @@ class MuEngine:
         logger.info("Initializing scheduler...")
         self.scheduler = MuScheduler(
             config=self.config.scheduler,
-            mu_config=self.config.mu,
         )
 
         self._initialized = True
