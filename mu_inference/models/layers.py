@@ -244,18 +244,19 @@ class MuTokenRoutedMLP(nn.Module):
         super().__init__()
         self.num_experts = num_experts
         self.hidden_size = hidden_size
-        self.intermediate_size = intermediate_size
+        # intermediate_size is total, divide by num_experts for per-expert size
+        self.expert_intermediate_size = intermediate_size // num_experts
         self.mu_config = mu_config
 
-        # Per-expert weights
+        # Per-expert weights: [num_experts, hidden_size, expert_intermediate]
         self.gate_proj = nn.Parameter(
-            torch.empty(num_experts, hidden_size, intermediate_size)
+            torch.empty(num_experts, hidden_size, self.expert_intermediate_size)
         )
         self.up_proj = nn.Parameter(
-            torch.empty(num_experts, hidden_size, intermediate_size)
+            torch.empty(num_experts, hidden_size, self.expert_intermediate_size)
         )
         self.down_proj = nn.Parameter(
-            torch.empty(num_experts, intermediate_size, hidden_size)
+            torch.empty(num_experts, self.expert_intermediate_size, hidden_size)
         )
 
         self._init_weights()
