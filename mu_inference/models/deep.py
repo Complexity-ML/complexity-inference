@@ -26,6 +26,7 @@ from mu_inference.models.layers import (
     MuAttention,
     MuTokenRoutedMLP,
     MuMLP,
+    INLDynamics,
 )
 from mu_inference.core.mu import mu_clamp
 
@@ -79,6 +80,13 @@ class DeepDecoderLayer(nn.Module):
             mu_config=mu_config,
         )
 
+        # INL Dynamics (robotics-grade control)
+        dynamics_controller_hidden = getattr(config, 'dynamics_controller_hidden', 64)
+        self.dynamics = INLDynamics(
+            hidden_size=config.hidden_size,
+            controller_hidden=dynamics_controller_hidden,
+        )
+
         # MLP (Token-Routed or standard based on layer)
         # Use Token-Routed MLP if num_experts > 1
         if config.num_experts and config.num_experts > 1:
@@ -105,7 +113,8 @@ class DeepDecoderLayer(nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         use_cache: bool = True,
         token_ids: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        velocity_states: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]], torch.Tensor]:
         """
         Forward pass through the layer.
 
@@ -116,9 +125,10 @@ class DeepDecoderLayer(nn.Module):
             past_key_value: Cached KV for this layer
             use_cache: Whether to return updated cache
             token_ids: Token IDs for routing (if using Token-Routed MLP)
+            velocity_states: Velocity for INL dynamics
 
         Returns:
-            (output_hidden_states, updated_cache)
+            (output_hidden_states, updated_cache, velocity_states)
         """
         residual = hidden_states
 
@@ -131,7 +141,11 @@ class DeepDecoderLayer(nn.Module):
             past_key_value=past_key_value,
             use_cache=use_cache,
         )
-        hidden_states = residual + attn_output
+
+        # INL Dynamics (after attention, before residual)
+        hidden_states, velocity_states, _ = self.dynamics(attn_output, velocity_states)
+
+        hidden_states = residual + hidden_states
 
         # Pre-norm + MLP
         residual = hidden_states
@@ -153,7 +167,7 @@ class DeepDecoderLayer(nn.Module):
                 self.mu_config.clamp_max,
             )
 
-        return hidden_states, new_cache
+        return hidden_states, new_cache, velocity_states
 
 
 @register_model("deep")
@@ -270,17 +284,19 @@ class DeepForCausalLM(MuModelBase):
 
         # Process through layers
         new_key_values = [] if use_cache else None
+        velocity_states = None  # Track velocity across layers
 
         for layer_idx, layer in enumerate(self.layers):
             past_kv = past_key_values[layer_idx] if past_key_values else None
 
-            hidden_states, new_kv = layer(
+            hidden_states, new_kv, velocity_states = layer(
                 hidden_states,
                 position_ids=position_ids,
                 attention_mask=attention_mask,
                 past_key_value=past_kv,
                 use_cache=use_cache,
                 token_ids=input_ids,  # For Token-Routed MLP
+                velocity_states=velocity_states,
             )
 
             if use_cache:

@@ -18,6 +18,109 @@ from mu_inference.core.mu import mu_clamp, soft_clamp
 from mu_inference.core.config import MuConfig
 
 
+class INLDynamics(nn.Module):
+    """
+    INL Dynamics - Robotics-grade control with velocity tracking.
+
+    This is the key component that makes Pacific Prime unique.
+    Creates smooth, stable trajectories like a robot controller.
+
+    Equations:
+        error = h - mu(h)                   # deviation from contextual equilibrium
+        v_next = alpha * v - beta * error   # velocity update
+        h_next = h + dt * gate * v_next     # position update
+
+    Parameters:
+        - mu: learnable equilibrium target
+        - controller_in/out: MLP that computes alpha, beta, gate from context
+        - mu_proj: context-dependent equilibrium adjustment
+    """
+
+    def __init__(
+        self,
+        hidden_size: int,
+        controller_hidden: int = 64,
+        dt: float = 0.1,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.dt = dt
+        self.controller_hidden = controller_hidden
+
+        # Learnable equilibrium (target position)
+        self.mu = nn.Parameter(torch.zeros(hidden_size))
+
+        # Contextual mu projection - adapts equilibrium per token
+        self.mu_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        nn.init.zeros_(self.mu_proj.weight)
+
+        # Controller MLP - computes alpha, beta, gate from context
+        # Input: [h, v] concatenated (2H -> controller_hidden -> 3H)
+        self.controller_in = nn.Linear(hidden_size * 2, controller_hidden)
+        self.controller_out = nn.Linear(controller_hidden, hidden_size * 3)
+
+        # Initialize controller biases for desired initial values
+        with torch.no_grad():
+            bias = self.controller_out.bias
+            # alpha in [0,1] via sigmoid, init to ~0.9
+            bias[:hidden_size].fill_(2.2)  # sigmoid(2.2) ≈ 0.9
+            # beta in [0,inf) via softplus, init to ~0.1
+            bias[hidden_size:hidden_size*2].fill_(-2.2)  # softplus(-2.2) ≈ 0.1
+            # gate in [0,1] via sigmoid, init to ~0.5
+            bias[hidden_size*2:].fill_(0.0)  # sigmoid(0) = 0.5
+
+            # Small weights for stable start
+            self.controller_out.weight.normal_(0, 0.01)
+
+    def forward(
+        self,
+        h: torch.Tensor,
+        v: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Apply dynamics update.
+
+        Args:
+            h: Hidden states [batch, seq_len, hidden_size]
+            v: Velocity states [batch, seq_len, hidden_size] (None = init to zero)
+
+        Returns:
+            h_next: Updated hidden states
+            v_next: Updated velocity states
+            mu_contextual: Contextual equilibrium
+        """
+        # Initialize velocity if not provided
+        if v is None:
+            v = torch.zeros_like(h)
+
+        # Controller: [h, v] -> alpha, beta, gate
+        hv = torch.cat([h, v], dim=-1)  # [B, S, 2H]
+        ctrl_hidden = F.silu(self.controller_in(hv))  # [B, S, ctrl_hidden]
+        controller_out = self.controller_out(ctrl_hidden)  # [B, S, 3H]
+
+        # Split and apply activations
+        alpha_raw, beta_raw, gate_raw = torch.split(
+            controller_out, self.hidden_size, dim=-1
+        )
+        alpha = torch.sigmoid(alpha_raw)      # [0, 1] - inertia
+        beta = torch.clamp(F.softplus(beta_raw), max=2.0)  # [0, 2] - correction
+        gate = torch.sigmoid(gate_raw)        # [0, 1] - amplitude
+
+        # Contextual mu: base equilibrium + context adjustment
+        mu_contextual = self.mu + self.mu_proj(h)
+
+        # Dynamics equations
+        error = h - mu_contextual
+        v_next = alpha * v - beta * error
+
+        # Clamp velocity for stability
+        v_next = torch.clamp(v_next, min=-10.0, max=10.0)
+
+        h_next = h + self.dt * gate * v_next
+
+        return h_next, v_next, mu_contextual
+
+
 class MuRMSNorm(nn.Module):
     """
     RMSNorm with Mu dynamics.
