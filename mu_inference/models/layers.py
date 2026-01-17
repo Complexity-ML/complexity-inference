@@ -232,6 +232,8 @@ class MuTokenRoutedMLP(nn.Module):
     Used by Pacific Prime / DeepForCausalLM.
 
     This is NOT MoE - it's deterministic and doesn't need load balancing.
+
+    Uses fused gate_up_proj for efficiency (matches HuggingFace format).
     """
 
     def __init__(
@@ -248,13 +250,12 @@ class MuTokenRoutedMLP(nn.Module):
         self.expert_intermediate_size = intermediate_size // num_experts
         self.mu_config = mu_config
 
-        # Per-expert weights: [num_experts, hidden_size, expert_intermediate]
-        self.gate_proj = nn.Parameter(
-            torch.empty(num_experts, hidden_size, self.expert_intermediate_size)
+        # Fused gate and up projection: [num_experts, hidden_size, 2 * expert_intermediate]
+        # First half is gate, second half is up
+        self.gate_up_proj = nn.Parameter(
+            torch.empty(num_experts, hidden_size, 2 * self.expert_intermediate_size)
         )
-        self.up_proj = nn.Parameter(
-            torch.empty(num_experts, hidden_size, self.expert_intermediate_size)
-        )
+        # Down projection: [num_experts, expert_intermediate, hidden_size]
         self.down_proj = nn.Parameter(
             torch.empty(num_experts, self.expert_intermediate_size, hidden_size)
         )
@@ -263,8 +264,8 @@ class MuTokenRoutedMLP(nn.Module):
 
     def _init_weights(self):
         """Initialize weights."""
-        for param in [self.gate_proj, self.up_proj, self.down_proj]:
-            nn.init.kaiming_uniform_(param, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.gate_up_proj, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.down_proj, a=math.sqrt(5))
 
     def forward(
         self,
@@ -306,10 +307,14 @@ class MuTokenRoutedMLP(nn.Module):
             # Get hidden states for this expert
             expert_hidden = hidden_states[mask]  # [num_tokens, hidden]
 
-            # Expert computation (SwiGLU)
-            gate = F.silu(expert_hidden @ self.gate_proj[expert_idx])
-            up = expert_hidden @ self.up_proj[expert_idx]
-            expert_output = (gate * up) @ self.down_proj[expert_idx]
+            # Fused gate_up projection
+            gate_up = expert_hidden @ self.gate_up_proj[expert_idx]  # [num_tokens, 2 * intermediate]
+
+            # Split into gate and up
+            gate, up = gate_up.chunk(2, dim=-1)
+
+            # SwiGLU: silu(gate) * up
+            expert_output = (F.silu(gate) * up) @ self.down_proj[expert_idx]
 
             output[mask] = expert_output
 
