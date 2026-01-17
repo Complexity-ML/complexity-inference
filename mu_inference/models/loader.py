@@ -83,7 +83,7 @@ def config_from_dict(config_dict: Dict[str, Any]) -> ModelConfig:
         rms_norm_eps=config_dict.get("rms_norm_eps", 1e-6),
         rope_theta=config_dict.get("rope_theta", 10000.0),
         num_experts=config_dict.get("num_experts", config_dict.get("num_local_experts")),
-        qk_norm=config_dict.get("qk_norm", False),
+        use_qk_norm=config_dict.get("use_qk_norm", config_dict.get("qk_norm", False)),
         tie_word_embeddings=config_dict.get("tie_word_embeddings", True),
     )
 
