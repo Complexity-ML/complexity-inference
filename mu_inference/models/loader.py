@@ -85,6 +85,12 @@ def config_from_dict(config_dict: Dict[str, Any]) -> ModelConfig:
         num_experts=config_dict.get("num_experts", config_dict.get("num_local_experts")),
         use_qk_norm=config_dict.get("use_qk_norm", config_dict.get("qk_norm", False)),
         tie_word_embeddings=config_dict.get("tie_word_embeddings", True),
+        # INL Dynamics params (Pacific-Prime specific)
+        dynamics_alpha=config_dict.get("dynamics_alpha", 0.9),
+        dynamics_beta=config_dict.get("dynamics_beta", 0.1),
+        dynamics_gate=config_dict.get("dynamics_gate", 0.5),
+        dynamics_dt=config_dict.get("dynamics_dt", 0.1),
+        dynamics_controller_hidden=config_dict.get("dynamics_controller_hidden", 64),
     )
 
 
@@ -172,51 +178,21 @@ def map_weight_names(
     model: nn.Module,
 ) -> Dict[str, torch.Tensor]:
     """
-    Map HuggingFace weight names to our format.
+    Map checkpoint weight names to our format.
 
-    Handles various naming conventions.
+    Handles:
+    - HuggingFace format (model.layers.X...)
+    - Complexity-Deep format (layers.X...)
     """
     mapped = {}
     model_keys = set(n for n, _ in model.named_parameters())
 
     # Common prefix mappings
     prefix_maps = [
-        ("model.", ""),  # Remove 'model.' prefix
+        ("model.", ""),  # Remove 'model.' prefix (HuggingFace)
         ("transformer.", ""),
         ("decoder.", ""),
     ]
-
-    # Layer name mappings
-    name_maps = {
-        # Embeddings
-        "embed_tokens.weight": "embed_tokens.weight",
-        "wte.weight": "embed_tokens.weight",
-
-        # LM head
-        "lm_head.weight": "lm_head.weight",
-
-        # Final norm
-        "model.norm.weight": "norm.weight",
-        "norm.weight": "norm.weight",
-        "ln_f.weight": "norm.weight",
-
-        # Attention
-        "q_proj": "self_attn.q_proj",
-        "k_proj": "self_attn.k_proj",
-        "v_proj": "self_attn.v_proj",
-        "o_proj": "self_attn.o_proj",
-
-        # Layer norms
-        "input_layernorm": "input_layernorm",
-        "post_attention_layernorm": "post_attention_layernorm",
-        "ln_1": "input_layernorm",
-        "ln_2": "post_attention_layernorm",
-
-        # MLP
-        "gate_proj": "mlp.gate_proj",
-        "up_proj": "mlp.up_proj",
-        "down_proj": "mlp.down_proj",
-    }
 
     for key, tensor in state_dict.items():
         new_key = key
@@ -226,8 +202,6 @@ def map_weight_names(
             if new_key.startswith(old_prefix):
                 new_key = new_prefix + new_key[len(old_prefix):]
                 break
-
-        # At this point: model.layers.0.self_attn.q_proj.weight -> layers.0.self_attn.q_proj.weight
 
         # Check if key exists in model
         if new_key in model_keys:

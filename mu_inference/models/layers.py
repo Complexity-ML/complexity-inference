@@ -41,6 +41,9 @@ class INLDynamics(nn.Module):
         hidden_size: int,
         controller_hidden: int = 64,
         dt: float = 0.1,
+        init_alpha: float = 0.9,
+        init_beta: float = 0.1,
+        init_gate: float = 0.5,
     ):
         super().__init__()
         self.hidden_size = hidden_size
@@ -59,15 +62,18 @@ class INLDynamics(nn.Module):
         self.controller_in = nn.Linear(hidden_size * 2, controller_hidden)
         self.controller_out = nn.Linear(controller_hidden, hidden_size * 3)
 
-        # Initialize controller biases for desired initial values
+        # Initialize controller biases from config values
         with torch.no_grad():
             bias = self.controller_out.bias
-            # alpha in [0,1] via sigmoid, init to ~0.9
-            bias[:hidden_size].fill_(2.2)  # sigmoid(2.2) ≈ 0.9
-            # beta in [0,inf) via softplus, init to ~0.1
-            bias[hidden_size:hidden_size*2].fill_(-2.2)  # softplus(-2.2) ≈ 0.1
-            # gate in [0,1] via sigmoid, init to ~0.5
-            bias[hidden_size*2:].fill_(0.0)  # sigmoid(0) = 0.5
+            # alpha in [0,1] via sigmoid - inverse sigmoid to get bias
+            alpha_bias = math.log(init_alpha / (1.0 - init_alpha + 1e-8))
+            bias[:hidden_size].fill_(alpha_bias)
+            # beta in [0,inf) via softplus - inverse softplus to get bias
+            beta_bias = math.log(math.exp(init_beta) - 1.0 + 1e-8)
+            bias[hidden_size:hidden_size*2].fill_(beta_bias)
+            # gate in [0,1] via sigmoid - inverse sigmoid to get bias
+            gate_bias = math.log(init_gate / (1.0 - init_gate + 1e-8))
+            bias[hidden_size*2:].fill_(gate_bias)
 
             # Small weights for stable start
             self.controller_out.weight.normal_(0, 0.01)

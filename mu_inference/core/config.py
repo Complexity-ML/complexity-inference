@@ -149,6 +149,13 @@ class ModelConfig:
     bos_token_id: int = 1
     eos_token_id: int = 2
 
+    # INL Dynamics (Pacific-Prime specific)
+    dynamics_alpha: float = 0.9
+    dynamics_beta: float = 0.1
+    dynamics_gate: float = 0.5
+    dynamics_dt: float = 0.1
+    dynamics_controller_hidden: int = 64
+
     def __post_init__(self):
         if self.head_dim is None:
             self.head_dim = self.hidden_size // self.num_attention_heads
@@ -194,6 +201,12 @@ class ModelConfig:
             pad_token_id=config_dict.get("pad_token_id", 0),
             bos_token_id=config_dict.get("bos_token_id", 1),
             eos_token_id=config_dict.get("eos_token_id", 2),
+            # INL Dynamics
+            dynamics_alpha=config_dict.get("dynamics_alpha", 0.9),
+            dynamics_beta=config_dict.get("dynamics_beta", 0.1),
+            dynamics_gate=config_dict.get("dynamics_gate", 0.5),
+            dynamics_dt=config_dict.get("dynamics_dt", 0.1),
+            dynamics_controller_hidden=config_dict.get("dynamics_controller_hidden", 64),
         )
 
 

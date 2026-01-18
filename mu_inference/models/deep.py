@@ -80,11 +80,14 @@ class DeepDecoderLayer(nn.Module):
             mu_config=mu_config,
         )
 
-        # INL Dynamics (robotics-grade control)
-        dynamics_controller_hidden = getattr(config, 'dynamics_controller_hidden', 64)
+        # INL Dynamics (robotics-grade control) - params from config.json
         self.dynamics = INLDynamics(
             hidden_size=config.hidden_size,
-            controller_hidden=dynamics_controller_hidden,
+            controller_hidden=getattr(config, 'dynamics_controller_hidden', 64),
+            dt=getattr(config, 'dynamics_dt', 0.1),
+            init_alpha=getattr(config, 'dynamics_alpha', 0.9),
+            init_beta=getattr(config, 'dynamics_beta', 0.1),
+            init_gate=getattr(config, 'dynamics_gate', 0.5),
         )
 
         # MLP (Token-Routed or standard based on layer)
