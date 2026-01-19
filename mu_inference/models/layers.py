@@ -710,10 +710,16 @@ class MuAttention(nn.Module):
 
         # Scaled dot-product attention (uses FlashAttention when available)
         # q, k, v are [batch, heads, seq, head_dim]
+        # IMPORTANT: is_causal should only be True for prefill (when q_len == k_len)
+        # For decode with KV cache, q_len=1 but k_len=past+1, so is_causal must be False
+        q_len = q.shape[2]
+        k_len = k.shape[2]
+        use_causal = attention_mask is None and q_len == k_len
+
         attn_output = F.scaled_dot_product_attention(
             q, k, v,
             attn_mask=attention_mask,
-            is_causal=attention_mask is None,
+            is_causal=use_causal,
         )
 
         # Reshape back: [batch, heads, seq, head_dim] -> [batch, seq, hidden]
