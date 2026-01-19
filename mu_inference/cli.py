@@ -280,13 +280,14 @@ def generate_main():
 
 def bench_main():
     """
-    Run benchmarks.
+    Run comprehensive benchmark tests.
 
     Usage:
-        mu-bench --model <model_path> [--num-prompts 10]
+        mu-bench --model <model_path>
+        mu-bench --model <model_path> --output-len 256 --num-prompts 20
     """
     parser = argparse.ArgumentParser(
-        description="Mu Inference Benchmarks"
+        description="Mu Inference Benchmark"
     )
 
     parser.add_argument(
@@ -313,6 +314,12 @@ def bench_main():
         help="Output length in tokens (default: 128)",
     )
     parser.add_argument(
+        "--warmup",
+        type=int,
+        default=2,
+        help="Warmup runs (default: 2)",
+    )
+    parser.add_argument(
         "--device",
         default="cuda",
         help="Device (default: cuda)",
@@ -327,12 +334,19 @@ def bench_main():
     args = parser.parse_args()
 
     import time
-    from mu_inference.core.config import EngineConfig, MuConfig, SamplingParams, ModelConfig
+    import statistics
+    from mu_inference.core.config import EngineConfig, MuConfig, SamplingParams
     from mu_inference.serving.engine import MuEngine
+    from mu_inference.models.loader import load_config, config_from_dict
+
+    # Load model config
+    config_dict = load_config(args.model)
+    model_config = config_from_dict(config_dict)
 
     # Config
     engine_config = EngineConfig(
-        mu=MuConfig(enabled=True),
+        model=model_config,
+        mu=MuConfig(enabled=False),
         device=args.device,
         dtype=args.dtype,
     )
@@ -347,47 +361,104 @@ def bench_main():
     async def run_bench():
         await engine.initialize(args.model)
 
+        # Get VRAM usage
+        vram_allocated = 0
+        vram_reserved = 0
+        if args.device == "cuda":
+            import torch
+            vram_allocated = torch.cuda.memory_allocated() / 1024**3
+            vram_reserved = torch.cuda.memory_reserved() / 1024**3
+
         # Create prompts
         prompts = [
-            "The quick brown fox " * (args.prompt_len // 4)
-            for _ in range(args.num_prompts)
+            "The quick brown fox jumps over the lazy dog. " * (args.prompt_len // 10)
+            for _ in range(args.num_prompts + args.warmup)
         ]
 
-        print(f"\nMu Inference Benchmark")
-        print(f"=" * 50)
-        print(f"Model: {args.model}")
-        print(f"Device: {args.device}, dtype: {args.dtype}")
-        print(f"Prompts: {args.num_prompts}")
-        print(f"Prompt length: ~{args.prompt_len} tokens")
-        print(f"Output length: {args.output_len} tokens")
-        print(f"=" * 50)
+        print(f"\n{'='*60}")
+        print(f"  MU-INFERENCE BENCHMARK")
+        print(f"{'='*60}")
+        print(f"  Model: {args.model}")
+        print(f"  Device: {args.device}, dtype: {args.dtype}")
+        print(f"  VRAM: {vram_allocated:.2f} GB allocated, {vram_reserved:.2f} GB reserved")
+        print(f"  Prompts: {args.num_prompts} (+ {args.warmup} warmup)")
+        print(f"  Prompt length: ~{args.prompt_len} tokens")
+        print(f"  Output length: {args.output_len} tokens")
+        print(f"{'='*60}\n")
 
+        # Warmup
+        print(f"Warming up ({args.warmup} runs)...")
+        for i in range(args.warmup):
+            await engine.generate(prompt=prompts[i], sampling_params=sampling_params)
+        print("Warmup complete.\n")
+
+        # Benchmark
+        print(f"Running benchmark...")
+        latencies = []
         total_prompt_tokens = 0
         total_output_tokens = 0
-        start_time = time.time()
 
-        for i, prompt in enumerate(prompts):
+        for i in range(args.num_prompts):
+            prompt = prompts[args.warmup + i]
+
+            # Measure total latency
+            start = time.perf_counter()
             output = await engine.generate(
                 prompt=prompt,
                 sampling_params=sampling_params,
             )
-            total_prompt_tokens += output.usage["prompt_tokens"]
-            total_output_tokens += output.usage["completion_tokens"]
+            elapsed = time.perf_counter() - start
 
-            if (i + 1) % 5 == 0:
-                print(f"Completed {i + 1}/{args.num_prompts} prompts...")
+            latencies.append(elapsed * 1000)  # ms
+            prompt_tokens = output.usage["prompt_tokens"]
+            output_tokens = output.usage["completion_tokens"]
+            total_prompt_tokens += prompt_tokens
+            total_output_tokens += output_tokens
 
-        elapsed = time.time() - start_time
+            if (i + 1) % 5 == 0 or i == args.num_prompts - 1:
+                print(f"  [{i + 1}/{args.num_prompts}] Latency: {elapsed*1000:.1f}ms, Tokens: {output_tokens}")
+
+        # Calculate statistics
+        total_time = sum(latencies) / 1000  # seconds
         total_tokens = total_prompt_tokens + total_output_tokens
 
-        print(f"\nResults:")
-        print(f"-" * 50)
-        print(f"Total time: {elapsed:.2f}s")
-        print(f"Total prompt tokens: {total_prompt_tokens}")
-        print(f"Total output tokens: {total_output_tokens}")
-        print(f"Throughput: {total_tokens / elapsed:.2f} tokens/s")
-        print(f"Output throughput: {total_output_tokens / elapsed:.2f} tokens/s")
-        print(f"Latency per request: {elapsed / args.num_prompts * 1000:.2f}ms")
+        # TPOT (Time Per Output Token)
+        tpot_list = [lat / (total_output_tokens / args.num_prompts) for lat in latencies]
+
+        print(f"\n{'='*60}")
+        print(f"  RESULTS")
+        print(f"{'='*60}")
+        print(f"\n  Throughput:")
+        print(f"    Total tokens/s:  {total_tokens / total_time:.1f}")
+        print(f"    Output tokens/s: {total_output_tokens / total_time:.1f}")
+        print(f"    Requests/s:      {args.num_prompts / total_time:.2f}")
+
+        print(f"\n  Latency (end-to-end):")
+        print(f"    Mean:   {statistics.mean(latencies):.1f} ms")
+        print(f"    Median: {statistics.median(latencies):.1f} ms")
+        if len(latencies) >= 20:
+            print(f"    P95:    {sorted(latencies)[int(len(latencies) * 0.95)]:.1f} ms")
+            print(f"    P99:    {sorted(latencies)[int(len(latencies) * 0.99)]:.1f} ms")
+        print(f"    Min:    {min(latencies):.1f} ms")
+        print(f"    Max:    {max(latencies):.1f} ms")
+
+        print(f"\n  Time per Output Token (TPOT):")
+        avg_output_tokens = total_output_tokens / args.num_prompts
+        print(f"    Mean:   {statistics.mean(latencies) / avg_output_tokens:.2f} ms/token")
+
+        print(f"\n  Tokens:")
+        print(f"    Total prompt:  {total_prompt_tokens}")
+        print(f"    Total output:  {total_output_tokens}")
+        print(f"    Avg per request: {total_output_tokens / args.num_prompts:.1f}")
+
+        print(f"\n  Memory:")
+        if args.device == "cuda":
+            import torch
+            print(f"    VRAM allocated: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+            print(f"    VRAM reserved:  {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
+            print(f"    Peak VRAM:      {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB")
+
+        print(f"\n{'='*60}\n")
 
         await engine.shutdown()
 
