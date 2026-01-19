@@ -92,6 +92,17 @@ def serve_main():
     import uvicorn
     from mu_inference.core.config import EngineConfig, MuConfig, ModelConfig, CacheConfig
     from mu_inference.serving.server import create_app
+    from mu_inference.models.loader import load_config, config_from_dict
+
+    # Load model config from model directory (IMPORTANT: gets use_qk_norm etc)
+    config_dict = load_config(args.model)
+    model_config = config_from_dict(config_dict)
+
+    # Override max_position_embeddings if specified
+    if args.max_model_len:
+        model_config.max_position_embeddings = args.max_model_len
+
+    logger.info(f"Model config: use_qk_norm={model_config.use_qk_norm}, num_experts={model_config.num_experts}")
 
     # Build config
     mu_config = MuConfig(
@@ -99,13 +110,8 @@ def serve_main():
         mu=args.mu,
     )
 
-    model_config = ModelConfig(
-        max_position_embeddings=args.max_model_len,
-        dtype=args.dtype,
-    )
-
     cache_config = CacheConfig(
-        max_seq_len=args.max_model_len,
+        max_seq_len=model_config.max_position_embeddings,
     )
 
     engine_config = EngineConfig(
@@ -113,6 +119,7 @@ def serve_main():
         mu=mu_config,
         cache=cache_config,
         device=args.device,
+        dtype=args.dtype,
     )
 
     # Create app
@@ -208,10 +215,18 @@ def generate_main():
     # Import
     from mu_inference.core.config import EngineConfig, MuConfig, SamplingParams, ModelConfig
     from mu_inference.serving.engine import MuEngine
+    from mu_inference.models.loader import load_config, config_from_dict
+
+    # Load model config from model directory (IMPORTANT: gets use_qk_norm etc)
+    config_dict = load_config(args.model)
+    model_config = config_from_dict(config_dict)
+
+    logger.info(f"Model config: use_qk_norm={model_config.use_qk_norm}, num_experts={model_config.num_experts}")
 
     # Build config
     mu_config = MuConfig(enabled=args.mu_enabled)
     engine_config = EngineConfig(
+        model=model_config,
         mu=mu_config,
         device=args.device,
         dtype=args.dtype,
