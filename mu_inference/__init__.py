@@ -30,7 +30,7 @@ CLI Generation:
     $ mu-generate --model path/to/model --prompt "Hello!"
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Complexity ML"
 
 # Core
@@ -50,7 +50,7 @@ from mu_inference.models.loader import load_model
 from mu_inference.models.registry import MODEL_REGISTRY, register_model
 
 # Serving
-from mu_inference.serving.engine import MuEngine
+from mu_inference.serving.engine import MuEngine, MuBatchEngine
 
 __all__ = [
     # Version
@@ -74,4 +74,5 @@ __all__ = [
     "register_model",
     # Engine
     "MuEngine",
+    "MuBatchEngine",
 ]

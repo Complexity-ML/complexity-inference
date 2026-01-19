@@ -260,6 +260,11 @@ class SchedulerConfig:
     enable_chunked_prefill: bool = True
     max_prefill_tokens: int = 4096
 
+    # Continuous batching
+    enable_continuous_batching: bool = True
+    batch_wait_time_ms: float = 5.0  # Max wait time to form a batch
+    min_batch_size: int = 1  # Minimum requests before executing
+
 
 @dataclass
 class EngineConfig:

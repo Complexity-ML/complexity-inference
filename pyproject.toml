@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mu-inference"
-version = "0.1.0"
+version = "0.2.0"
 description = "Mu-Guided High-Performance LLM Inference Engine"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -13,7 +13,8 @@ authors = [
 ]
 keywords = [
     "llm", "inference", "transformer", "moe",
-    "mu-dynamics", "inl", "complexity-deep"
+    "mu-dynamics", "inl", "complexity-deep",
+    "continuous-batching", "batch-inference"
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

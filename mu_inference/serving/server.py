@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from mu_inference.core.config import SamplingParams, EngineConfig
-from mu_inference.serving.engine import MuEngine
+from mu_inference.serving.engine import MuEngine, MuBatchEngine
 
 logger = logging.getLogger(__name__)
 
@@ -399,6 +399,7 @@ def create_app(
     model_path: str,
     config: Optional[EngineConfig] = None,
     model_name: Optional[str] = None,
+    use_batch_engine: Optional[bool] = None,
 ) -> FastAPI:
     """
     Create FastAPI app with Mu engine.
@@ -407,14 +408,24 @@ def create_app(
         model_path: Path to model
         config: Engine configuration
         model_name: Model name for API
+        use_batch_engine: Force batch engine (None = auto based on config)
 
     Returns:
         FastAPI app
     """
     config = config or EngineConfig()
 
+    # Determine which engine to use
+    if use_batch_engine is None:
+        use_batch_engine = config.scheduler.enable_continuous_batching
+
     # Create engine
-    engine = MuEngine(config=config, model_path=model_path)
+    if use_batch_engine:
+        logger.info("Using MuBatchEngine (continuous batching enabled)")
+        engine = MuBatchEngine(config=config, model_path=model_path)
+    else:
+        logger.info("Using MuEngine (sequential processing)")
+        engine = MuEngine(config=config, model_path=model_path)
 
     # Derive model name from path if not provided
     if model_name is None:

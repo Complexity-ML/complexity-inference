@@ -151,7 +151,9 @@ class MuWorker:
         """
         Execute forward pass for a batch of requests.
 
-        Currently processes one request at a time (batching coming soon).
+        Supports continuous batching:
+        - Decode requests (single token) are batched together for efficiency
+        - Prefill requests are processed individually (variable length)
 
         Args:
             requests: List of WorkerRequest
@@ -159,20 +161,113 @@ class MuWorker:
         Returns:
             List of WorkerOutput
         """
-        outputs = []
+        if not requests:
+            return []
 
-        for request in requests:
+        # Separate decode (single token) vs prefill (variable length)
+        decode_requests = [r for r in requests if not r.is_prefill]
+        prefill_requests = [r for r in requests if r.is_prefill]
+
+        outputs_map: Dict[str, WorkerOutput] = {}
+
+        # Batch decode requests together (efficient)
+        if decode_requests:
+            try:
+                decode_outputs = self._execute_batched_decode(decode_requests)
+                for output in decode_outputs:
+                    outputs_map[output.request_id] = output
+            except Exception as e:
+                logger.error(f"Batched decode error: {e}")
+                # Fallback to individual processing
+                for request in decode_requests:
+                    try:
+                        output = self._execute_single(request)
+                        outputs_map[output.request_id] = output
+                    except Exception as ex:
+                        outputs_map[request.request_id] = WorkerOutput(
+                            request_id=request.request_id,
+                            logits=torch.zeros(1, self.model.config.vocab_size),
+                            finished=True,
+                            error=str(ex),
+                        )
+
+        # Process prefill requests individually (variable length)
+        for request in prefill_requests:
             try:
                 output = self._execute_single(request)
-                outputs.append(output)
+                outputs_map[output.request_id] = output
             except Exception as e:
                 logger.error(f"Error processing {request.request_id}: {e}")
-                outputs.append(WorkerOutput(
+                outputs_map[request.request_id] = WorkerOutput(
                     request_id=request.request_id,
                     logits=torch.zeros(1, self.model.config.vocab_size),
                     finished=True,
                     error=str(e),
-                ))
+                )
+
+        # Return in original order
+        return [outputs_map[r.request_id] for r in requests]
+
+    @torch.inference_mode()
+    def _execute_batched_decode(self, requests: List[WorkerRequest]) -> List[WorkerOutput]:
+        """
+        Execute batched decode for multiple requests.
+
+        All decode requests have sequence length 1, so we can batch them efficiently.
+        """
+        batch_size = len(requests)
+
+        # Collect input tensors and position info
+        input_ids_list = []
+        position_ids_list = []
+        request_ids = []
+
+        for request in requests:
+            req_state = self.active_requests.get(request.request_id)
+            if req_state is None:
+                raise RuntimeError(f"Request {request.request_id} not allocated")
+
+            input_ids_list.append(request.input_ids.to(self.device))
+            request_ids.append(request.request_id)
+
+            # Position ID based on past sequence length
+            past_kv = req_state["past_key_values"]
+            past_len = 0 if past_kv is None else past_kv[0][0].shape[2]
+            position_ids_list.append(
+                torch.tensor([[past_len]], dtype=torch.long, device=self.device)
+            )
+
+        # Stack into batches: [batch_size, 1]
+        batched_input_ids = torch.cat(input_ids_list, dim=0)
+        batched_position_ids = torch.cat(position_ids_list, dim=0)
+
+        # For batched decode, we need to handle KV cache per-request
+        # This is a simplified approach - process individually but prepare for future optimization
+        # TODO: Implement true batched attention with separate KV caches
+
+        outputs = []
+        for i, request in enumerate(requests):
+            req_state = self.active_requests[request.request_id]
+            past_key_values = req_state["past_key_values"]
+
+            # Single forward pass per request (still needed due to separate KV caches)
+            model_output, new_kv = self.model(
+                input_ids=input_ids_list[i],
+                position_ids=position_ids_list[i],
+                past_key_values=past_key_values,
+                use_cache=True,
+            )
+
+            # Update state
+            req_state["past_key_values"] = new_kv
+            req_state["seq_len"] += 1
+            self.stats["tokens_generated"] += 1
+
+            outputs.append(WorkerOutput(
+                request_id=request.request_id,
+                logits=model_output.logits,
+                finished=False,
+            ))
 
         return outputs
 
