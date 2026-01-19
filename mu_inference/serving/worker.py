@@ -231,9 +231,9 @@ class MuWorker:
             request_ids.append(request.request_id)
 
             # Position ID based on past sequence length
-            # KV cache shape is [batch, seq, heads, head_dim], so seq_len is dim=1
+            # KV cache shape is [batch, heads, seq, head_dim], so seq_len is dim=2
             past_kv = req_state["past_key_values"]
-            past_len = 0 if past_kv is None else past_kv[0][0].shape[1]
+            past_len = 0 if past_kv is None else past_kv[0][0].shape[2]
             position_ids_list.append(
                 torch.tensor([[past_len]], dtype=torch.long, device=self.device)
             )
@@ -293,8 +293,8 @@ class MuWorker:
         if request.position_ids is not None:
             position_ids = request.position_ids.to(self.device)
         else:
-            # KV cache shape is [batch, seq, heads, head_dim], so seq_len is dim=1
-            past_len = 0 if past_key_values is None else past_key_values[0][0].shape[1]
+            # KV cache shape is [batch, heads, seq, head_dim], so seq_len is dim=2
+            past_len = 0 if past_key_values is None else past_key_values[0][0].shape[2]
             seq_len = input_ids.shape[1]
             position_ids = torch.arange(
                 past_len, past_len + seq_len,

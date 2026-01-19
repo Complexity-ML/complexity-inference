@@ -202,6 +202,8 @@ class MuRotaryEmbedding(nn.Module):
     Rotary Position Embeddings (RoPE) with Mu integration.
 
     Encodes position information through rotation matrices.
+    NOTE: This version is kept for backward compatibility but is NOT used
+    by MuAttention. Use RotaryEmbeddingCompat instead.
     """
 
     def __init__(
@@ -261,6 +263,63 @@ class MuRotaryEmbedding(nn.Module):
         return cos, sin
 
 
+class RotaryEmbeddingCompat(nn.Module):
+    """
+    Rotary Position Embedding (RoPE) - Compatible with complexity-deep.
+
+    This matches the exact implementation from complexity_deep.core.rotary.
+    Returns cos/sin with shape [seq_len, head_dim] for direct use.
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        max_seq_len: int = 2048,
+        theta: float = 10000.0,
+    ):
+        super().__init__()
+        self.dim = dim
+        self.max_seq_len = max_seq_len
+        self.theta = theta
+
+        # Compute inverse frequencies
+        inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq)
+
+        # Precompute cos/sin cache
+        self._build_cache(max_seq_len)
+
+    def _build_cache(self, seq_len: int):
+        """Build cos/sin cache for given sequence length."""
+        t = torch.arange(seq_len, device=self.inv_freq.device).float()
+        freqs = torch.outer(t, self.inv_freq)  # [seq_len, dim/2]
+        emb = torch.cat([freqs, freqs], dim=-1)  # [seq_len, dim]
+
+        self.register_buffer("cos_cached", emb.cos(), persistent=False)
+        self.register_buffer("sin_cached", emb.sin(), persistent=False)
+
+    def forward(self, seq_len: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Get cos/sin embeddings for given sequence length.
+
+        Args:
+            seq_len: Sequence length
+            device: Device to put tensors on
+
+        Returns:
+            cos: [seq_len, dim]
+            sin: [seq_len, dim]
+        """
+        if seq_len > self.max_seq_len:
+            self._build_cache(seq_len)
+            self.max_seq_len = seq_len
+
+        return (
+            self.cos_cached[:seq_len].to(device),
+            self.sin_cached[:seq_len].to(device),
+        )
+
+
 def rotate_half(x: torch.Tensor) -> torch.Tensor:
     """Rotate half the hidden dims of the input."""
     x1 = x[..., : x.shape[-1] // 2]
@@ -276,6 +335,8 @@ def apply_rotary_pos_emb(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Apply rotary position embeddings to Q and K.
+    NOTE: This version expects [batch, seq, heads, head_dim] tensors.
+    Use apply_rotary_pos_emb_compat for [batch, heads, seq, head_dim] tensors.
 
     Args:
         q: Query tensor [batch, seq, heads, head_dim]
@@ -290,6 +351,36 @@ def apply_rotary_pos_emb(
     cos = cos.unsqueeze(2)  # [batch, seq, 1, head_dim]
     sin = sin.unsqueeze(2)
 
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+
+    return q_embed, k_embed
+
+
+def apply_rotary_pos_emb_compat(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Apply rotary position embeddings to Q and K tensors.
+    Matches complexity-deep implementation exactly.
+
+    Args:
+        q: Query tensor [batch, heads, seq, head_dim]
+        k: Key tensor [batch, heads, seq, head_dim]
+        cos: Cosine embeddings [seq, head_dim]
+        sin: Sine embeddings [seq, head_dim]
+
+    Returns:
+        Rotated Q and K tensors
+    """
+    # Reshape cos/sin for broadcasting: [1, 1, seq, dim]
+    cos = cos.unsqueeze(0).unsqueeze(0)
+    sin = sin.unsqueeze(0).unsqueeze(0)
+
+    # Apply rotation
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
 
@@ -472,10 +563,15 @@ class MuAttention(nn.Module):
     """
     Multi-Head Attention with Mu dynamics and Mu-guided attention.
 
+    Matches complexity-deep implementation exactly for weight compatibility:
+    - KV cache shape: [batch, heads, seq, head_dim]
+    - RoPE applied after transpose to [batch, heads, seq, head_dim]
+    - QK normalization on [batch, heads, seq, head_dim]
+
     Features:
     - Grouped Query Attention (GQA) support
     - QK normalization (using nn.RMSNorm for checkpoint compatibility)
-    - RoPE integration
+    - RoPE integration (matching complexity-deep)
     - Mu-guided attention (mu_to_q, mu_to_k, mu_to_v projections)
     - Mu-clamping on attention output
     - Uses PyTorch's scaled_dot_product_attention (FlashAttention when available)
@@ -501,7 +597,7 @@ class MuAttention(nn.Module):
         self.mu_config = mu_config
 
         # Number of Q heads per KV head (for GQA)
-        self.num_groups = self.num_heads // self.num_kv_heads
+        self.num_kv_groups = self.num_heads // self.num_kv_heads
 
         # Projections
         self.q_proj = nn.Linear(hidden_size, self.num_heads * self.head_dim, bias=False)
@@ -520,11 +616,11 @@ class MuAttention(nn.Module):
             self.q_norm = nn.RMSNorm(self.head_dim, eps=1e-6)
             self.k_norm = nn.RMSNorm(self.head_dim, eps=1e-6)
 
-        # RoPE
-        self.rotary_emb = MuRotaryEmbedding(
+        # RoPE - use compat version that matches complexity-deep
+        self.rotary_emb = RotaryEmbeddingCompat(
             self.head_dim,
-            max_position_embeddings=max_position_embeddings,
-            base=rope_base,
+            max_seq_len=max_position_embeddings,
+            theta=rope_base,
         )
 
     def forward(
@@ -539,72 +635,90 @@ class MuAttention(nn.Module):
         """
         Forward pass with Mu-guided attention.
 
+        Matches complexity-deep forward pass exactly:
+        1. Project Q, K, V (with optional mu bias)
+        2. Reshape to [batch, heads, seq, head_dim]
+        3. Apply QK normalization
+        4. Apply RoPE
+        5. Handle KV cache
+        6. GQA expansion
+        7. SDPA attention
+
         Args:
             hidden_states: [batch, seq, hidden]
-            position_ids: [batch, seq]
+            position_ids: [batch, seq] - used to compute kv_seq_len
             attention_mask: [batch, 1, seq, seq] or None
-            past_key_value: Cached (K, V) or None
+            past_key_value: Cached (K, V) with shape [batch, heads, seq, head_dim]
             use_cache: Whether to return updated cache
             mu_prev: Mu from previous layer (guides Q, K, V)
 
         Returns:
-            (output, updated_cache)
+            (output, updated_cache) where cache shape is [batch, heads, seq, head_dim]
         """
         batch_size, seq_len, _ = hidden_states.shape
 
-        # Project Q, K, V
-        q = self.q_proj(hidden_states)
+        # Project Q, K, V (KQV order matching complexity-deep)
         k = self.k_proj(hidden_states)
+        q = self.q_proj(hidden_states)
         v = self.v_proj(hidden_states)
 
-        # Mu-guided attention: mu from previous layer biases Q, K, V
+        # Mu-guided attention: mu from previous layer biases K, Q, V
         if mu_prev is not None:
-            q = q + self.mu_to_q(mu_prev)
             k = k + self.mu_to_k(mu_prev)
+            q = q + self.mu_to_q(mu_prev)
             v = v + self.mu_to_v(mu_prev)
 
-        # Reshape: [batch, seq, heads, head_dim]
-        q = q.view(batch_size, seq_len, self.num_heads, self.head_dim)
-        k = k.view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
-        v = v.view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
+        # Reshape to [batch, heads, seq, head_dim] (complexity-deep order)
+        q = q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(batch_size, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch_size, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
-        # Apply QK normalization
+        # Apply QK normalization (on [batch, heads, seq, head_dim])
         if self.use_qk_norm:
             q = self.q_norm(q)
             k = self.k_norm(k)
 
-        # Apply RoPE
-        cos, sin = self.rotary_emb(q, position_ids)
-        q, k = apply_rotary_pos_emb(q, k, cos, sin)
-
-        # Handle KV cache
+        # Calculate kv_seq_len for RoPE
+        kv_seq_len = seq_len
         if past_key_value is not None:
-            past_k, past_v = past_key_value
-            k = torch.cat([past_k, k], dim=1)
-            v = torch.cat([past_v, v], dim=1)
+            kv_seq_len += past_key_value[0].shape[2]  # KV cache is [batch, heads, seq, head_dim]
+
+        # Get cos/sin for RoPE (matching complexity-deep)
+        cos, sin = self.rotary_emb(kv_seq_len, hidden_states.device)
+        cos = cos.to(q.dtype)
+        sin = sin.to(q.dtype)
+
+        # For cached generation, only rotate the new positions
+        if past_key_value is not None:
+            cos = cos[kv_seq_len - seq_len:]
+            sin = sin[kv_seq_len - seq_len:]
+
+        # Apply RoPE (matching complexity-deep)
+        q, k = apply_rotary_pos_emb_compat(q, k, cos, sin)
+
+        # Handle KV cache (shape: [batch, heads, seq, head_dim])
+        if past_key_value is not None:
+            k = torch.cat([past_key_value[0], k], dim=2)  # Concat on seq dimension
+            v = torch.cat([past_key_value[1], v], dim=2)
 
         new_cache = (k, v) if use_cache else None
 
-        # Expand KV for GQA
-        if self.num_groups > 1:
-            k = k.repeat_interleave(self.num_groups, dim=2)
-            v = v.repeat_interleave(self.num_groups, dim=2)
-
-        # Transpose for attention: [batch, heads, seq, head_dim]
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
+        # GQA: Repeat KV heads to match Q heads
+        if self.num_kv_groups > 1:
+            k = k.repeat_interleave(self.num_kv_groups, dim=1)
+            v = v.repeat_interleave(self.num_kv_groups, dim=1)
 
         # Scaled dot-product attention (uses FlashAttention when available)
+        # q, k, v are [batch, heads, seq, head_dim]
         attn_output = F.scaled_dot_product_attention(
             q, k, v,
             attn_mask=attention_mask,
-            is_causal=attention_mask is None and seq_len > 1,
+            is_causal=attention_mask is None,
         )
 
-        # Reshape back: [batch, seq, hidden]
+        # Reshape back: [batch, heads, seq, head_dim] -> [batch, seq, hidden]
         attn_output = attn_output.transpose(1, 2).contiguous()
-        attn_output = attn_output.view(batch_size, -1, self.num_heads * self.head_dim)
+        attn_output = attn_output.view(batch_size, seq_len, -1)
 
         # Output projection
         output = self.o_proj(attn_output)
