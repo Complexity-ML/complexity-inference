@@ -16,7 +16,10 @@ from mu_inference.core.config import MuConfig
 
 def test_single_forward():
     """Test single forward pass without KV cache."""
-    model_path = "C:/INL/pacific-prime/hf-pacific-prime"
+    # Use relative path that works on both Windows and Linux
+    import os
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(script_dir, "..", "pacific-prime")
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     print(f"Loading model from {model_path}")

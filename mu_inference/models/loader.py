@@ -40,13 +40,16 @@ def load_config(model_path: str) -> Dict[str, Any]:
     Returns:
         Config dictionary
     """
+    # Resolve to absolute path first (handles ../relative paths)
+    resolved_path = os.path.abspath(model_path)
+
     # Check if local path
-    if os.path.isdir(model_path):
-        config_path = os.path.join(model_path, "config.json")
+    if os.path.isdir(resolved_path):
+        config_path = os.path.join(resolved_path, "config.json")
         if os.path.exists(config_path):
             with open(config_path, "r") as f:
                 return json.load(f)
-        raise FileNotFoundError(f"No config.json found in {model_path}")
+        raise FileNotFoundError(f"No config.json found in {resolved_path}")
 
     # Try HuggingFace Hub
     try:
@@ -107,16 +110,19 @@ def load_weights(
     """
     weight_files = []
 
+    # Resolve to absolute path first (handles ../relative paths)
+    resolved_path = os.path.abspath(model_path)
+
     # Check if local path
-    if os.path.isdir(model_path):
+    if os.path.isdir(resolved_path):
         # Look for safetensors first
-        safetensor_files = list(Path(model_path).glob("*.safetensors"))
+        safetensor_files = list(Path(resolved_path).glob("*.safetensors"))
         if safetensor_files:
             weight_files = [str(f) for f in safetensor_files]
         else:
             # Fall back to PyTorch
-            pt_files = list(Path(model_path).glob("*.bin"))
-            pt_files.extend(Path(model_path).glob("*.pt"))
+            pt_files = list(Path(resolved_path).glob("*.bin"))
+            pt_files.extend(Path(resolved_path).glob("*.pt"))
             weight_files = [str(f) for f in pt_files]
     else:
         # HuggingFace Hub
