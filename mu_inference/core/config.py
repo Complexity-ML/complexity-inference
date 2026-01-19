@@ -66,19 +66,22 @@ class MuConfig:
 
 @dataclass
 class SamplingParams:
-    """Parameters for token sampling."""
+    """Parameters for token sampling.
 
-    # Temperature (0 = greedy, 1 = default, >1 = more random)
-    temperature: float = 1.0
+    Defaults match complexity-deep generate.py for optimal generation quality.
+    """
+
+    # Temperature (0 = greedy, 0.8 = balanced, >1 = more random)
+    temperature: float = 0.8
 
     # Top-k sampling (0 = disabled)
     top_k: int = 50
 
     # Nucleus sampling threshold
-    top_p: float = 1.0
+    top_p: float = 0.9
 
-    # Repetition penalty
-    repetition_penalty: float = 1.0
+    # Repetition penalty (1.0 = disabled, 1.1 = recommended)
+    repetition_penalty: float = 1.1
 
     # Presence/frequency penalties (OpenAI style)
     presence_penalty: float = 0.0

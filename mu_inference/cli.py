@@ -172,8 +172,8 @@ def generate_main():
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.7,
-        help="Sampling temperature (default: 0.7)",
+        default=0.8,
+        help="Sampling temperature (default: 0.8)",
     )
     parser.add_argument(
         "--top-p",
@@ -186,6 +186,12 @@ def generate_main():
         type=int,
         default=50,
         help="Top-k sampling (default: 50)",
+    )
+    parser.add_argument(
+        "--repetition-penalty",
+        type=float,
+        default=1.1,
+        help="Repetition penalty (default: 1.1)",
     )
     parser.add_argument(
         "--device",
@@ -237,6 +243,7 @@ def generate_main():
         temperature=args.temperature,
         top_p=args.top_p,
         top_k=args.top_k,
+        repetition_penalty=args.repetition_penalty,
     )
 
     # Create engine
