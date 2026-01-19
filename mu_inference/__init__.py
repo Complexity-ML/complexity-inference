@@ -30,7 +30,7 @@ CLI Generation:
     $ mu-generate --model path/to/model --prompt "Hello!"
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __author__ = "Complexity ML"
 
 # Core

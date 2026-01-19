@@ -263,9 +263,14 @@ class MuWorker:
             req_state["seq_len"] += 1
             self.stats["tokens_generated"] += 1
 
+            # Extract last token logits (handle both 2D and 3D output)
+            logits = model_output.logits
+            if logits.dim() == 3:
+                logits = logits[:, -1, :]  # [batch, seq, vocab] -> [batch, vocab]
+
             outputs.append(WorkerOutput(
                 request_id=request.request_id,
-                logits=model_output.logits[:, -1, :],  # Only last token logits
+                logits=logits,
                 finished=False,
             ))
 
@@ -312,9 +317,14 @@ class MuWorker:
         else:
             self.stats["tokens_generated"] += 1
 
+        # Extract last token logits (handle both 2D and 3D output)
+        logits = model_output.logits
+        if logits.dim() == 3:
+            logits = logits[:, -1, :]  # [batch, seq, vocab] -> [batch, vocab]
+
         return WorkerOutput(
             request_id=request_id,
-            logits=model_output.logits[:, -1, :],  # Only last token logits
+            logits=logits,
             finished=False,
         )
 
