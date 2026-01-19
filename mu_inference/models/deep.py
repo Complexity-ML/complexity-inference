@@ -97,6 +97,7 @@ class DeepDecoderLayer(nn.Module):
                 hidden_size=config.hidden_size,
                 intermediate_size=config.intermediate_size,
                 num_experts=config.num_experts,
+                vocab_size=config.vocab_size,
                 mu_config=mu_config,
             )
             self.use_token_routing = True
@@ -152,12 +153,12 @@ class DeepDecoderLayer(nn.Module):
 
         hidden_states = residual + hidden_states
 
-        # === 3. MLP ===
+        # === 3. MU-GUIDED MLP ===
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
 
         if self.use_token_routing:
-            hidden_states = self.mlp(hidden_states, token_ids=token_ids)
+            hidden_states = self.mlp(hidden_states, token_ids=token_ids, mu=mu_current)
         else:
             hidden_states = self.mlp(hidden_states)
 

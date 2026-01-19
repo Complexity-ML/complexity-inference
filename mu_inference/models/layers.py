@@ -343,6 +343,8 @@ class MuTokenRoutedMLP(nn.Module):
     This is NOT MoE - it's deterministic and doesn't need load balancing.
 
     Uses fused gate_up_proj for efficiency (matches HuggingFace format).
+
+    INL 2025: Mu-guided expert routing - mu can influence expert selection.
     """
 
     def __init__(
@@ -350,11 +352,13 @@ class MuTokenRoutedMLP(nn.Module):
         hidden_size: int,
         intermediate_size: int,
         num_experts: int = 4,
+        vocab_size: int = 32000,
         mu_config: Optional[MuConfig] = None,
     ):
         super().__init__()
         self.num_experts = num_experts
         self.hidden_size = hidden_size
+        self.vocab_size = vocab_size
         # intermediate_size is total, divide by num_experts for per-expert size
         self.expert_intermediate_size = intermediate_size // num_experts
         self.mu_config = mu_config
@@ -369,6 +373,17 @@ class MuTokenRoutedMLP(nn.Module):
             torch.empty(num_experts, self.expert_intermediate_size, hidden_size)
         )
 
+        # INL 2025: Mu-guided expert routing
+        # mu_router projects mu to expert preference logits
+        self.mu_router = nn.Linear(hidden_size, num_experts, bias=False)
+        nn.init.zeros_(self.mu_router.weight)  # Start neutral
+
+        # Token to expert mapping buffer
+        self.register_buffer(
+            "token_to_expert",
+            torch.arange(vocab_size, dtype=torch.long) % num_experts,
+        )
+
         self._init_weights()
 
     def _init_weights(self):
@@ -380,13 +395,15 @@ class MuTokenRoutedMLP(nn.Module):
         self,
         hidden_states: torch.Tensor,
         token_ids: Optional[torch.Tensor] = None,
+        mu: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        Forward with token-based routing.
+        Forward with token-based routing and optional mu-guided routing.
 
         Args:
             hidden_states: [batch, seq, hidden]
             token_ids: [batch, seq] - token IDs for routing
+            mu: [batch, seq, hidden] - mu from dynamics for guided routing
 
         Returns:
             output: [batch, seq, hidden]
@@ -395,37 +412,49 @@ class MuTokenRoutedMLP(nn.Module):
 
         if token_ids is None:
             # Fallback: use expert 0
-            token_ids = torch.zeros(
+            expert_ids = torch.zeros(
                 batch_size, seq_len,
                 dtype=torch.long, device=hidden_states.device
             )
+        else:
+            token_ids_clamped = token_ids.clamp(0, self.vocab_size - 1)
+            base_expert_ids = self.token_to_expert[token_ids_clamped]  # [batch, seq]
 
-        # Route tokens to experts
-        expert_ids = token_ids % self.num_experts
+            # INL 2025: Mu-guided expert routing
+            if mu is not None:
+                # Get mu preference for each expert
+                mu_logits = self.mu_router(mu)  # [batch, seq, num_experts]
 
-        # Process each token
-        output = torch.zeros_like(hidden_states)
+                # Create one-hot for base expert
+                base_one_hot = F.one_hot(base_expert_ids, self.num_experts).float()  # [B, S, E]
 
-        for expert_idx in range(self.num_experts):
-            # Find tokens for this expert
-            mask = expert_ids == expert_idx
+                # Combine: base routing + mu influence
+                combined_logits = base_one_hot * 10.0 + mu_logits  # base is strong (10.0)
 
-            if not mask.any():
-                continue
+                # Hard selection: argmax (still deterministic, but mu-influenced)
+                expert_ids = combined_logits.argmax(dim=-1)  # [batch, seq]
+            else:
+                expert_ids = base_expert_ids
 
-            # Get hidden states for this expert
-            expert_hidden = hidden_states[mask]  # [num_tokens, hidden]
+        # Flatten for batched processing
+        flat_hidden = hidden_states.view(-1, self.hidden_size)  # [B*S, H]
+        flat_expert_ids = expert_ids.view(-1)  # [B*S]
 
-            # Fused gate_up projection
-            gate_up = expert_hidden @ self.gate_up_proj[expert_idx]  # [num_tokens, 2 * intermediate]
+        # Gather weights for each token's expert
+        gate_up_weights = self.gate_up_proj[flat_expert_ids]  # [B*S, H, 2I]
+        down_weights = self.down_proj[flat_expert_ids]  # [B*S, I, H]
 
-            # Split into gate and up
-            gate, up = gate_up.chunk(2, dim=-1)
+        # Fused gate+up matmul
+        gate_up_out = torch.bmm(flat_hidden.unsqueeze(1), gate_up_weights).squeeze(1)  # [B*S, 2I]
 
-            # SwiGLU: silu(gate) * up
-            expert_output = (F.silu(gate) * up) @ self.down_proj[expert_idx]
+        # Split and apply SwiGLU
+        gate_out = gate_up_out[..., :self.expert_intermediate_size]
+        up_out = gate_up_out[..., self.expert_intermediate_size:]
+        intermediate = F.silu(gate_out) * up_out  # [B*S, I]
 
-            output[mask] = expert_output
+        # Down projection
+        output = torch.bmm(intermediate.unsqueeze(1), down_weights).squeeze(1)  # [B*S, H]
+        output = output.view(batch_size, seq_len, self.hidden_size)
 
         # Apply Mu clamping
         if self.mu_config is not None and self.mu_config.enabled:
