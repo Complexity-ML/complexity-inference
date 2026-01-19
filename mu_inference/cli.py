@@ -71,8 +71,8 @@ def serve_main():
     parser.add_argument(
         "--mu-enabled",
         action="store_true",
-        default=True,
-        help="Enable Mu dynamics (default: True)",
+        default=False,
+        help="Enable Mu clamping (only for models trained with mu_clamp)",
     )
     parser.add_argument(
         "--mu",
@@ -199,8 +199,8 @@ def generate_main():
     parser.add_argument(
         "--mu-enabled",
         action="store_true",
-        default=True,
-        help="Enable Mu dynamics",
+        default=False,
+        help="Enable Mu clamping (only for models trained with mu_clamp)",
     )
 
     args = parser.parse_args()

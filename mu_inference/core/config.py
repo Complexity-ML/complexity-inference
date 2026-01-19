@@ -28,10 +28,15 @@ class MuConfig:
 
     Mu (μ) is the equilibrium point that all values seek.
     This provides numerical stability through soft-clamping.
+
+    NOTE: mu_clamp should only be enabled for models trained WITH mu_clamp.
+    complexity-deep (Pacific Prime) was NOT trained with mu_clamp, so
+    it should be disabled by default for correct inference.
     """
 
-    # Master switch
-    enabled: bool = True
+    # Master switch - disabled by default for compatibility with
+    # models not trained with mu_clamp (like complexity-deep)
+    enabled: bool = False
 
     # Equilibrium point
     mu: float = 0.0
