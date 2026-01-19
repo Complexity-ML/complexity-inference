@@ -265,7 +265,8 @@ class DeepForCausalLM(MuModelBase):
 
         # Create position IDs if not provided
         if position_ids is None:
-            past_len = 0 if past_key_values is None else past_key_values[0][0].shape[2]
+            # KV cache shape is [batch, seq, heads, head_dim], so seq_len is dim=1
+            past_len = 0 if past_key_values is None else past_key_values[0][0].shape[1]
             position_ids = torch.arange(
                 past_len, past_len + seq_len,
                 dtype=torch.long, device=input_ids.device
@@ -276,7 +277,8 @@ class DeepForCausalLM(MuModelBase):
             # Convert from [batch, seq] to [batch, 1, seq, full_seq]
             full_seq_len = seq_len
             if past_key_values is not None:
-                full_seq_len += past_key_values[0][0].shape[2]
+                # KV cache shape is [batch, seq, heads, head_dim], so seq_len is dim=1
+                full_seq_len += past_key_values[0][0].shape[1]
 
             causal_mask = self._make_causal_mask(
                 seq_len, full_seq_len, hidden_states.dtype, hidden_states.device

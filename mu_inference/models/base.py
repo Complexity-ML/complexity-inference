@@ -159,7 +159,8 @@ class MuModelBase(ABC, nn.Module):
 
         if past_key_values is not None:
             # Position = cache length
-            past_len = past_key_values[0][0].shape[2]
+            # KV cache shape is [batch, seq, heads, head_dim], so seq_len is dim=1
+            past_len = past_key_values[0][0].shape[1]
             position_ids = torch.arange(
                 past_len, past_len + seq_len,
                 dtype=torch.long, device=input_ids.device
