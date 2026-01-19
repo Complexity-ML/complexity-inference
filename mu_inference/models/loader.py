@@ -168,6 +168,12 @@ def load_weights(
         logger.warning(f"Missing keys: {missing[:5]}{'...' if len(missing) > 5 else ''}")
     if unexpected:
         logger.warning(f"Unexpected keys: {unexpected[:5]}{'...' if len(unexpected) > 5 else ''}")
+        # Check for common issues
+        if any('q_norm' in k or 'k_norm' in k for k in unexpected):
+            logger.error(
+                "QK normalization weights found in checkpoint but model created without qk_norm! "
+                "Check that config.json has 'use_qk_norm': true"
+            )
 
     # Move to device and dtype
     model.to(device=device, dtype=dtype)
