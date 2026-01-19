@@ -265,7 +265,7 @@ class MuWorker:
 
             outputs.append(WorkerOutput(
                 request_id=request.request_id,
-                logits=model_output.logits,
+                logits=model_output.logits[:, -1, :],  # Only last token logits
                 finished=False,
             ))
 
@@ -314,7 +314,7 @@ class MuWorker:
 
         return WorkerOutput(
             request_id=request_id,
-            logits=model_output.logits,
+            logits=model_output.logits[:, -1, :],  # Only last token logits
             finished=False,
         )
 
