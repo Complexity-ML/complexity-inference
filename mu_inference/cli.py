@@ -215,24 +215,6 @@ def generate_main():
         default=False,
         help="Enable Mu clamping (only for models trained with mu_clamp)",
     )
-    parser.add_argument(
-        "--sliding",
-        type=int,
-        default=0,
-        help="Enable sliding generation: generate in segments, keeping last N tokens as context (0=disabled)",
-    )
-    parser.add_argument(
-        "--segment-tokens",
-        type=int,
-        default=200,
-        help="Tokens per segment in sliding mode (default: 200)",
-    )
-    parser.add_argument(
-        "--total-tokens",
-        type=int,
-        default=1000,
-        help="Total tokens to generate in sliding mode (default: 1000)",
-    )
     args = parser.parse_args()
 
     # Import
@@ -271,108 +253,24 @@ def generate_main():
 
         print(f"\nPrompt: {args.prompt}\n")
         print("=" * 50)
+        print("Generated:")
 
-        if args.sliding > 0:
-            # === SLIDING GENERATION MODE ===
-            # Generate in segments, keeping only last N tokens as context
-            print(f"Sliding mode: window={args.sliding} tokens, segment={args.segment_tokens} tokens")
-            print(f"Target: {args.total_tokens} total tokens\n")
-            print("Generated:")
-
-            # Track full output for display
-            full_output = ""
-            total_generated = 0
-            segment_num = 0
-
-            # Start with original prompt
-            current_prompt = args.prompt
-
-            while total_generated < args.total_tokens:
-                segment_num += 1
-                remaining = args.total_tokens - total_generated
-                tokens_this_segment = min(args.segment_tokens, remaining)
-
-                segment_params = SamplingParams(
-                    max_tokens=tokens_this_segment,
-                    temperature=args.temperature,
-                    top_p=args.top_p,
-                    top_k=args.top_k,
-                    repetition_penalty=args.repetition_penalty,
-                )
-
-                # Generate segment
-                finish_reason = None
-                if args.stream:
-                    segment_text = ""
-                    async for chunk in engine.generate_stream(
-                        prompt=current_prompt,
-                        sampling_params=segment_params,
-                    ):
-                        print(chunk.text, end="", flush=True)
-                        segment_text += chunk.text
-                        if hasattr(chunk, 'finish_reason') and chunk.finish_reason:
-                            finish_reason = chunk.finish_reason
-                    segment_tokens = tokens_this_segment  # Approximate
-                else:
-                    output = await engine.generate(
-                        prompt=current_prompt,
-                        sampling_params=segment_params,
-                    )
-                    segment_text = output.text
-                    segment_tokens = output.usage["completion_tokens"]
-                    finish_reason = output.finish_reason
-                    print(segment_text, end="", flush=True)
-
-                full_output += segment_text
-                total_generated += segment_tokens
-
-                # Check for EOS
-                if finish_reason == "stop":
-                    print(f"\n[EOS after {total_generated} tokens]")
-                    break
-
-                # Slide window: keep last N tokens as new context
-                # Convert full output to new prompt (sliding window)
-                combined = args.prompt + full_output
-
-                # Tokenize to count
-                combined_ids = engine.tokenizer.encode(combined, return_tensors="pt")
-                combined_len = combined_ids.shape[1]
-
-                if combined_len > args.sliding:
-                    # Keep only last N tokens
-                    kept_ids = combined_ids[0, -args.sliding:]
-                    current_prompt = engine.tokenizer.decode(kept_ids, skip_special_tokens=True)
-                else:
-                    current_prompt = combined
-
-                # Clear cache between segments to prevent OOM
-                engine.clear_cache()
-
-            print(f"\n\n{'=' * 50}")
-            print(f"Total tokens: {total_generated}")
-            print(f"Segments: {segment_num}")
-
+        if args.stream:
+            async for chunk in engine.generate_stream(
+                prompt=args.prompt,
+                sampling_params=sampling_params,
+            ):
+                print(chunk.text, end="", flush=True)
+            print()
         else:
-            # === NORMAL MODE ===
-            print("Generated:")
-
-            if args.stream:
-                async for chunk in engine.generate_stream(
-                    prompt=args.prompt,
-                    sampling_params=sampling_params,
-                ):
-                    print(chunk.text, end="", flush=True)
-                print()
-            else:
-                output = await engine.generate(
-                    prompt=args.prompt,
-                    sampling_params=sampling_params,
-                )
-                print(output.text)
-                print("=" * 50)
-                print(f"Tokens: {output.usage['completion_tokens']}")
-                print(f"Finish reason: {output.finish_reason}")
+            output = await engine.generate(
+                prompt=args.prompt,
+                sampling_params=sampling_params,
+            )
+            print(output.text)
+            print("=" * 50)
+            print(f"Tokens: {output.usage['completion_tokens']}")
+            print(f"Finish reason: {output.finish_reason}")
 
         await engine.shutdown()
 

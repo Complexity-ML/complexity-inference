@@ -404,41 +404,12 @@ class MuEngine:
         }
 
     def clear_cache(self) -> None:
-        """Clear the KV cache and aggressively free GPU memory."""
-        import gc
-        import torch
-
-        # Clear KV cache
+        """Clear the KV cache."""
         if self.worker and self.worker.cache:
             self.worker.cache.clear()
-
-        # Clear worker state
-        if self.worker:
-            # Clear active requests tracking
-            if hasattr(self.worker, 'active_requests'):
-                self.worker.active_requests.clear()
-
-            # Reset mu state if exists
-            if hasattr(self.worker, 'mu_state'):
-                self.worker.mu_state = None
-
-            # Reset position tracking
-            if hasattr(self.worker, 'position'):
-                self.worker.position = 0
-
-        # Delete any orphan tensors by clearing local refs
-        gc.collect()
-        gc.collect()  # Double collect for cyclic refs
-
-        # CUDA memory cleanup
+        import torch
         if torch.cuda.is_available():
-            torch.cuda.synchronize()  # Wait for all ops to finish
-            torch.cuda.empty_cache()  # Release cached memory back to CUDA
-
-            # Log memory after cleanup
-            allocated = torch.cuda.memory_allocated() / 1024**3
-            reserved = torch.cuda.memory_reserved() / 1024**3
-            logger.info(f"Memory after clear: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved")
+            torch.cuda.empty_cache()
 
     async def shutdown(self) -> None:
         """Shutdown the engine."""
