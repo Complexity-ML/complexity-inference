@@ -320,7 +320,13 @@ def generate_main():
                 max_chars = args.context_window * 4
                 if len(context) > max_chars:
                     context = context[-max_chars:]
-                    print(f"[context truncated to ~{args.context_window} tokens]")
+
+                # Clear CUDA cache every 50 passes to prevent fragmentation
+                if i > 0 and i % 50 == 0:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        print(f"[CUDA cache cleared]")
 
                 if args.stream:
                     pass_text = ""
