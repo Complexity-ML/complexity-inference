@@ -194,12 +194,6 @@ def generate_main():
         help="Repetition penalty (default: 1.1)",
     )
     parser.add_argument(
-        "--repetition-window",
-        type=int,
-        default=0,
-        help="Only penalize last N tokens (0=all, 256=sliding window)",
-    )
-    parser.add_argument(
         "--device",
         default="cuda",
         help="Device (default: cuda)",
@@ -222,35 +216,23 @@ def generate_main():
         help="Enable Mu clamping (only for models trained with mu_clamp)",
     )
     parser.add_argument(
-        "--reflection",
-        action="store_true",
-        help="Enable reflection mode (reasoning -> answer loop)",
-    )
-    parser.add_argument(
-        "--thinking-tokens",
-        type=int,
-        default=200,
-        help="Max tokens for reasoning phase (default: 200)",
-    )
-    parser.add_argument(
-        "--network",
+        "--sliding",
         type=int,
         default=0,
-        help="Number of passes for network reasoning (0=disabled)",
+        help="Enable sliding generation: generate in segments, keeping last N tokens as context (0=disabled)",
     )
     parser.add_argument(
-        "--pass-tokens",
+        "--segment-tokens",
         type=int,
-        default=100,
-        help="Max tokens per pass (default: 100)",
+        default=200,
+        help="Tokens per segment in sliding mode (default: 200)",
     )
     parser.add_argument(
-        "--context-window",
+        "--total-tokens",
         type=int,
-        default=1800,
-        help="Max context tokens to keep (sliding window, default: 1800)",
+        default=1000,
+        help="Total tokens to generate in sliding mode (default: 1000)",
     )
-
     args = parser.parse_args()
 
     # Import
@@ -279,7 +261,6 @@ def generate_main():
         top_p=args.top_p,
         top_k=args.top_k,
         repetition_penalty=args.repetition_penalty,
-        repetition_window=args.repetition_window,
     )
 
     # Create engine
@@ -291,143 +272,82 @@ def generate_main():
         print(f"\nPrompt: {args.prompt}\n")
         print("=" * 50)
 
-        if args.network > 0:
-            # === MULTI-CLONE MODE ===
-            # Network of clones: each sees accumulated context, continues naturally
-            # No artificial markers - just pure text continuation
-            print(f"Network Mode: {args.network} passes (network)")
-            print("-" * 50)
+        if args.sliding > 0:
+            # === SLIDING GENERATION MODE ===
+            # Generate in segments, keeping only last N tokens as context
+            print(f"Sliding mode: window={args.sliding} tokens, segment={args.segment_tokens} tokens")
+            print(f"Target: {args.total_tokens} total tokens\n")
+            print("Generated:")
 
-            pass_params = SamplingParams(
-                max_tokens=args.pass_tokens,
-                temperature=args.temperature,
-                top_p=args.top_p,
-                top_k=args.top_k,
-                repetition_penalty=args.repetition_penalty,
-                repetition_window=args.repetition_window,
-            )
+            # Track full output for display
+            full_output = ""
+            total_generated = 0
+            segment_num = 0
 
             # Start with original prompt
-            context = args.prompt
-            full_output = ""  # Keep all generated text
-            total_tokens = 0
-            repetition_count = 0
-            last_output = ""
+            current_prompt = args.prompt
 
-            # Each pass continues from sliding window context
-            for i in range(args.network):
-                print(f"\n--- Pass {i + 1}/{args.network} ---")
+            while total_generated < args.total_tokens:
+                segment_num += 1
+                remaining = args.total_tokens - total_generated
+                tokens_this_segment = min(args.segment_tokens, remaining)
 
-                # Truncate context to sliding window (keep last N chars ~= N*4 tokens)
-                max_chars = args.context_window * 4
-                if len(context) > max_chars:
-                    context = context[-max_chars:]
+                segment_params = SamplingParams(
+                    max_tokens=tokens_this_segment,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                    top_k=args.top_k,
+                    repetition_penalty=args.repetition_penalty,
+                )
 
-                # Clear KV cache every 10 passes to prevent OOM
-                if i > 0 and i % 10 == 0:
-                    engine.clear_cache()
-                    print(f"[KV cache cleared]")
-
+                # Generate segment
                 if args.stream:
-                    pass_text = ""
+                    segment_text = ""
                     async for chunk in engine.generate_stream(
-                        prompt=context,
-                        sampling_params=pass_params,
+                        prompt=current_prompt,
+                        sampling_params=segment_params,
                     ):
                         print(chunk.text, end="", flush=True)
-                        pass_text += chunk.text
-                    print()
-                    pass_tokens = len(pass_text.split())
+                        segment_text += chunk.text
+                    segment_tokens = tokens_this_segment  # Approximate
                 else:
                     output = await engine.generate(
-                        prompt=context,
-                        sampling_params=pass_params,
+                        prompt=current_prompt,
+                        sampling_params=segment_params,
                     )
-                    pass_text = output.text
-                    pass_tokens = output.usage["completion_tokens"]
-                    print(pass_text)
+                    segment_text = output.text
+                    segment_tokens = output.usage["completion_tokens"]
+                    print(segment_text, end="", flush=True)
 
-                # Accumulate context (will be truncated next iteration)
-                context = context + pass_text
-                full_output += pass_text
-                total_tokens += pass_tokens
+                full_output += segment_text
+                total_generated += segment_tokens
 
-                # Detect repetition loops (if same output 3x in a row, stop)
-                if pass_text.strip() == last_output.strip() and pass_text.strip():
-                    repetition_count += 1
-                    if repetition_count >= 3:
-                        print(f"\n[STOPPED: repetition loop detected after {i+1} passes]")
-                        break
+                # Check for EOS
+                if output.finish_reason == "stop":
+                    print(f"\n[EOS after {total_generated} tokens]")
+                    break
+
+                # Slide window: keep last N tokens as new context
+                # Convert full output to new prompt (sliding window)
+                combined = args.prompt + full_output
+
+                # Tokenize to count
+                combined_ids = engine.tokenizer.encode(combined, return_tensors="pt")
+                combined_len = combined_ids.shape[1]
+
+                if combined_len > args.sliding:
+                    # Keep only last N tokens
+                    kept_ids = combined_ids[0, -args.sliding:]
+                    current_prompt = engine.tokenizer.decode(kept_ids, skip_special_tokens=True)
                 else:
-                    repetition_count = 0
-                last_output = pass_text
+                    current_prompt = combined
 
-            print("=" * 50)
-            print(f"Total passes: {args.network}")
-            print(f"Total tokens generated: {total_tokens}")
-            print(f"\n--- Final accumulated text ({len(full_output)} chars) ---")
-            # Show full output (all passes concatenated)
-            generated = full_output
-            print(generated)
+                # Clear cache between segments to prevent OOM
+                engine.clear_cache()
 
-        elif args.reflection:
-            # === REFLECTION MODE ===
-            # Phase 1: Reasoning
-            print("Phase 1: Thinking...")
-            reasoning_params = SamplingParams(
-                max_tokens=args.thinking_tokens,
-                temperature=0.5,  # Focused reasoning
-                top_k=40,
-                repetition_penalty=args.repetition_penalty,
-            )
-
-            reasoning_prompt = f"{args.prompt}\n\nLet me think step by step:"
-
-            if args.stream:
-                reasoning_text = ""
-                async for chunk in engine.generate_stream(
-                    prompt=reasoning_prompt,
-                    sampling_params=reasoning_params,
-                ):
-                    print(chunk.text, end="", flush=True)
-                    reasoning_text += chunk.text
-                print("\n")
-                reasoning_tokens = len(reasoning_text.split())  # Approximate
-            else:
-                reasoning = await engine.generate(
-                    prompt=reasoning_prompt,
-                    sampling_params=reasoning_params,
-                )
-                reasoning_text = reasoning.text
-                reasoning_tokens = reasoning.usage["completion_tokens"]
-                print(f"{reasoning_text}\n")
-
-            # Phase 2: Answer
-            print("Phase 2: Answering...")
-            answer_prompt = f"{args.prompt}\n\nLet me think step by step:{reasoning_text}\n\nTherefore, my answer is:"
-
-            if args.stream:
-                answer_text = ""
-                async for chunk in engine.generate_stream(
-                    prompt=answer_prompt,
-                    sampling_params=sampling_params,
-                ):
-                    print(chunk.text, end="", flush=True)
-                    answer_text += chunk.text
-                print()
-                answer_tokens = len(answer_text.split())  # Approximate
-            else:
-                answer = await engine.generate(
-                    prompt=answer_prompt,
-                    sampling_params=sampling_params,
-                )
-                print(answer.text)
-                answer_tokens = answer.usage["completion_tokens"]
-
-            print("=" * 50)
-            print(f"Reasoning tokens: {reasoning_tokens}")
-            print(f"Answer tokens: {answer_tokens}")
-            print(f"Total tokens: {reasoning_tokens + answer_tokens}")
+            print(f"\n\n{'=' * 50}")
+            print(f"Total tokens: {total_generated}")
+            print(f"Segments: {segment_num}")
 
         else:
             # === NORMAL MODE ===

@@ -83,9 +83,6 @@ class SamplingParams:
     # Repetition penalty (1.0 = disabled, 1.1 = recommended)
     repetition_penalty: float = 1.1
 
-    # Repetition window (0 = all tokens, N = only last N tokens)
-    repetition_window: int = 0
-
     # Presence/frequency penalties (OpenAI style)
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.0
