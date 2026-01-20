@@ -222,8 +222,7 @@ class MuEngine:
                     top_p=sampling_params.top_p,
                     repetition_penalty=sampling_params.repetition_penalty,
                     past_tokens=input_ids[0].tolist() + generated_ids,
-                    repetition_window=getattr(sampling_params, 'repetition_window', 0),
-                )
+                                    )
 
                 next_token = sample_token(logits)
                 generated_ids.append(next_token)
@@ -336,8 +335,7 @@ class MuEngine:
                     top_p=sampling_params.top_p,
                     repetition_penalty=sampling_params.repetition_penalty,
                     past_tokens=input_ids[0].tolist() + generated_ids,
-                    repetition_window=getattr(sampling_params, 'repetition_window', 0),
-                )
+                                    )
 
                 next_token = sample_token(logits)
                 generated_ids.append(next_token)
