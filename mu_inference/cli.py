@@ -311,6 +311,8 @@ def generate_main():
             context = args.prompt
             full_output = ""  # Keep all generated text
             total_tokens = 0
+            repetition_count = 0
+            last_output = ""
 
             # Each pass continues from sliding window context
             for i in range(args.network):
@@ -351,6 +353,16 @@ def generate_main():
                 context = context + pass_text
                 full_output += pass_text
                 total_tokens += pass_tokens
+
+                # Detect repetition loops (if same output 3x in a row, stop)
+                if pass_text.strip() == last_output.strip() and pass_text.strip():
+                    repetition_count += 1
+                    if repetition_count >= 3:
+                        print(f"\n[STOPPED: repetition loop detected after {i+1} passes]")
+                        break
+                else:
+                    repetition_count = 0
+                last_output = pass_text
 
             print("=" * 50)
             print(f"Total passes: {args.network}")
