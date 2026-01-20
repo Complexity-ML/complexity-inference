@@ -280,8 +280,9 @@ def generate_main():
 
         if args.multi_clone > 0:
             # === MULTI-CLONE MODE ===
-            # Multiple "clones" of the same model discuss, last one synthesizes
-            print(f"Multi-Clone Mode: {args.multi_clone} passes")
+            # Network of clones: each sees accumulated context, continues naturally
+            # No artificial markers - just pure text continuation
+            print(f"Multi-Clone Mode: {args.multi_clone} passes (network)")
             print("-" * 50)
 
             clone_params = SamplingParams(
@@ -292,67 +293,44 @@ def generate_main():
                 repetition_penalty=args.repetition_penalty,
             )
 
-            # Build accumulated context
+            # Start with original prompt
             context = args.prompt
-            total_clone_tokens = 0
+            total_tokens = 0
 
-            # Clone warmup passes (N-1 clones discuss)
-            for i in range(args.multi_clone - 1):
-                clone_prompt = f"{context}\n\n[Clone {i + 1}]:"
-
-                print(f"\n[Clone {i + 1}]", end="")
+            # Each clone continues from accumulated context
+            for i in range(args.multi_clone):
+                print(f"\n--- Pass {i + 1}/{args.multi_clone} ---")
 
                 if args.stream:
-                    clone_text = ""
+                    pass_text = ""
                     async for chunk in engine.generate_stream(
-                        prompt=clone_prompt,
+                        prompt=context,
                         sampling_params=clone_params,
                     ):
                         print(chunk.text, end="", flush=True)
-                        clone_text += chunk.text
+                        pass_text += chunk.text
                     print()
-                    clone_tokens = len(clone_text.split())  # Approximate
+                    pass_tokens = len(pass_text.split())
                 else:
-                    clone_output = await engine.generate(
-                        prompt=clone_prompt,
+                    output = await engine.generate(
+                        prompt=context,
                         sampling_params=clone_params,
                     )
-                    clone_text = clone_output.text
-                    clone_tokens = clone_output.usage["completion_tokens"]
-                    print(f" {clone_text}")
+                    pass_text = output.text
+                    pass_tokens = output.usage["completion_tokens"]
+                    print(pass_text)
 
-                # Accumulate context for next clone
-                context = f"{context}\n\n[Clone {i + 1}]: {clone_text}"
-                total_clone_tokens += clone_tokens
-
-            # Final clone: synthesis
-            print(f"\n[Final - Synthesis]", end="")
-            synthesis_prompt = f"{context}\n\n[Summary]: Based on the above discussion,"
-
-            if args.stream:
-                synthesis_text = ""
-                async for chunk in engine.generate_stream(
-                    prompt=synthesis_prompt,
-                    sampling_params=sampling_params,
-                ):
-                    print(chunk.text, end="", flush=True)
-                    synthesis_text += chunk.text
-                print()
-                synthesis_tokens = len(synthesis_text.split())
-            else:
-                synthesis = await engine.generate(
-                    prompt=synthesis_prompt,
-                    sampling_params=sampling_params,
-                )
-                synthesis_text = synthesis.text
-                synthesis_tokens = synthesis.usage["completion_tokens"]
-                print(f" {synthesis_text}")
+                # Accumulate: next clone sees prompt + all previous outputs
+                context = context + pass_text
+                total_tokens += pass_tokens
 
             print("=" * 50)
-            print(f"Clone passes: {args.multi_clone - 1}")
-            print(f"Clone tokens: {total_clone_tokens}")
-            print(f"Synthesis tokens: {synthesis_tokens}")
-            print(f"Total tokens: {total_clone_tokens + synthesis_tokens}")
+            print(f"Total passes: {args.multi_clone}")
+            print(f"Total tokens generated: {total_tokens}")
+            print(f"\n--- Final accumulated text ---")
+            # Show only the generated part (without original prompt)
+            generated = context[len(args.prompt):]
+            print(generated)
 
         elif args.reflection:
             # === REFLECTION MODE ===
