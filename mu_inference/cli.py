@@ -227,16 +227,16 @@ def generate_main():
         help="Max tokens for reasoning phase (default: 200)",
     )
     parser.add_argument(
-        "--multi-clone",
+        "--network",
         type=int,
         default=0,
-        help="Number of clone passes for collective reasoning (0=disabled)",
+        help="Number of passes for network reasoning (0=disabled)",
     )
     parser.add_argument(
-        "--clone-tokens",
+        "--pass-tokens",
         type=int,
         default=100,
-        help="Max tokens per clone pass (default: 100)",
+        help="Max tokens per pass (default: 100)",
     )
 
     args = parser.parse_args()
@@ -278,15 +278,15 @@ def generate_main():
         print(f"\nPrompt: {args.prompt}\n")
         print("=" * 50)
 
-        if args.multi_clone > 0:
+        if args.network > 0:
             # === MULTI-CLONE MODE ===
             # Network of clones: each sees accumulated context, continues naturally
             # No artificial markers - just pure text continuation
-            print(f"Multi-Clone Mode: {args.multi_clone} passes (network)")
+            print(f"Network Mode: {args.network} passes (network)")
             print("-" * 50)
 
-            clone_params = SamplingParams(
-                max_tokens=args.clone_tokens,
+            pass_params = SamplingParams(
+                max_tokens=args.pass_tokens,
                 temperature=args.temperature,
                 top_p=args.top_p,
                 top_k=args.top_k,
@@ -298,14 +298,14 @@ def generate_main():
             total_tokens = 0
 
             # Each clone continues from accumulated context
-            for i in range(args.multi_clone):
-                print(f"\n--- Pass {i + 1}/{args.multi_clone} ---")
+            for i in range(args.network):
+                print(f"\n--- Pass {i + 1}/{args.network} ---")
 
                 if args.stream:
                     pass_text = ""
                     async for chunk in engine.generate_stream(
                         prompt=context,
-                        sampling_params=clone_params,
+                        sampling_params=pass_params,
                     ):
                         print(chunk.text, end="", flush=True)
                         pass_text += chunk.text
@@ -314,7 +314,7 @@ def generate_main():
                 else:
                     output = await engine.generate(
                         prompt=context,
-                        sampling_params=clone_params,
+                        sampling_params=pass_params,
                     )
                     pass_text = output.text
                     pass_tokens = output.usage["completion_tokens"]
@@ -325,7 +325,7 @@ def generate_main():
                 total_tokens += pass_tokens
 
             print("=" * 50)
-            print(f"Total passes: {args.multi_clone}")
+            print(f"Total passes: {args.network}")
             print(f"Total tokens generated: {total_tokens}")
             print(f"\n--- Final accumulated text ---")
             # Show only the generated part (without original prompt)
