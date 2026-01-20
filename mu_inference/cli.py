@@ -301,6 +301,7 @@ def generate_main():
                 )
 
                 # Generate segment
+                finish_reason = None
                 if args.stream:
                     segment_text = ""
                     async for chunk in engine.generate_stream(
@@ -309,6 +310,8 @@ def generate_main():
                     ):
                         print(chunk.text, end="", flush=True)
                         segment_text += chunk.text
+                        if hasattr(chunk, 'finish_reason') and chunk.finish_reason:
+                            finish_reason = chunk.finish_reason
                     segment_tokens = tokens_this_segment  # Approximate
                 else:
                     output = await engine.generate(
@@ -317,13 +320,14 @@ def generate_main():
                     )
                     segment_text = output.text
                     segment_tokens = output.usage["completion_tokens"]
+                    finish_reason = output.finish_reason
                     print(segment_text, end="", flush=True)
 
                 full_output += segment_text
                 total_generated += segment_tokens
 
                 # Check for EOS
-                if output.finish_reason == "stop":
+                if finish_reason == "stop":
                     print(f"\n[EOS after {total_generated} tokens]")
                     break
 
