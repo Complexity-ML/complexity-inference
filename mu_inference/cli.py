@@ -226,6 +226,18 @@ def generate_main():
         default=200,
         help="Max tokens for reasoning phase (default: 200)",
     )
+    parser.add_argument(
+        "--multi-clone",
+        type=int,
+        default=0,
+        help="Number of clone passes for collective reasoning (0=disabled)",
+    )
+    parser.add_argument(
+        "--clone-tokens",
+        type=int,
+        default=100,
+        help="Max tokens per clone pass (default: 100)",
+    )
 
     args = parser.parse_args()
 
@@ -266,7 +278,83 @@ def generate_main():
         print(f"\nPrompt: {args.prompt}\n")
         print("=" * 50)
 
-        if args.reflection:
+        if args.multi_clone > 0:
+            # === MULTI-CLONE MODE ===
+            # Multiple "clones" of the same model discuss, last one synthesizes
+            print(f"Multi-Clone Mode: {args.multi_clone} passes")
+            print("-" * 50)
+
+            clone_params = SamplingParams(
+                max_tokens=args.clone_tokens,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                repetition_penalty=args.repetition_penalty,
+            )
+
+            # Build accumulated context
+            context = args.prompt
+            total_clone_tokens = 0
+
+            # Clone warmup passes (N-1 clones discuss)
+            for i in range(args.multi_clone - 1):
+                clone_prompt = f"{context}\n\n[Clone {i + 1}]:"
+
+                print(f"\n[Clone {i + 1}]", end="")
+
+                if args.stream:
+                    clone_text = ""
+                    async for chunk in engine.generate_stream(
+                        prompt=clone_prompt,
+                        sampling_params=clone_params,
+                    ):
+                        print(chunk.text, end="", flush=True)
+                        clone_text += chunk.text
+                    print()
+                    clone_tokens = len(clone_text.split())  # Approximate
+                else:
+                    clone_output = await engine.generate(
+                        prompt=clone_prompt,
+                        sampling_params=clone_params,
+                    )
+                    clone_text = clone_output.text
+                    clone_tokens = clone_output.usage["completion_tokens"]
+                    print(f" {clone_text}")
+
+                # Accumulate context for next clone
+                context = f"{context}\n\n[Clone {i + 1}]: {clone_text}"
+                total_clone_tokens += clone_tokens
+
+            # Final clone: synthesis
+            print(f"\n[Final - Synthesis]", end="")
+            synthesis_prompt = f"{context}\n\n[Summary]: Based on the above discussion,"
+
+            if args.stream:
+                synthesis_text = ""
+                async for chunk in engine.generate_stream(
+                    prompt=synthesis_prompt,
+                    sampling_params=sampling_params,
+                ):
+                    print(chunk.text, end="", flush=True)
+                    synthesis_text += chunk.text
+                print()
+                synthesis_tokens = len(synthesis_text.split())
+            else:
+                synthesis = await engine.generate(
+                    prompt=synthesis_prompt,
+                    sampling_params=sampling_params,
+                )
+                synthesis_text = synthesis.text
+                synthesis_tokens = synthesis.usage["completion_tokens"]
+                print(f" {synthesis_text}")
+
+            print("=" * 50)
+            print(f"Clone passes: {args.multi_clone - 1}")
+            print(f"Clone tokens: {total_clone_tokens}")
+            print(f"Synthesis tokens: {synthesis_tokens}")
+            print(f"Total tokens: {total_clone_tokens + synthesis_tokens}")
+
+        elif args.reflection:
             # === REFLECTION MODE ===
             # Phase 1: Reasoning
             print("Phase 1: Thinking...")
