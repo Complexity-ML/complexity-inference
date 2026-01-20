@@ -244,6 +244,12 @@ def generate_main():
         default=100,
         help="Max tokens per pass (default: 100)",
     )
+    parser.add_argument(
+        "--context-window",
+        type=int,
+        default=1800,
+        help="Max context tokens to keep (sliding window, default: 1800)",
+    )
 
     args = parser.parse_args()
 
@@ -303,11 +309,18 @@ def generate_main():
 
             # Start with original prompt
             context = args.prompt
+            full_output = ""  # Keep all generated text
             total_tokens = 0
 
-            # Each clone continues from accumulated context
+            # Each pass continues from sliding window context
             for i in range(args.network):
                 print(f"\n--- Pass {i + 1}/{args.network} ---")
+
+                # Truncate context to sliding window (keep last N chars ~= N*4 tokens)
+                max_chars = args.context_window * 4
+                if len(context) > max_chars:
+                    context = context[-max_chars:]
+                    print(f"[context truncated to ~{args.context_window} tokens]")
 
                 if args.stream:
                     pass_text = ""
@@ -328,16 +341,17 @@ def generate_main():
                     pass_tokens = output.usage["completion_tokens"]
                     print(pass_text)
 
-                # Accumulate: next clone sees prompt + all previous outputs
+                # Accumulate context (will be truncated next iteration)
                 context = context + pass_text
+                full_output += pass_text
                 total_tokens += pass_tokens
 
             print("=" * 50)
             print(f"Total passes: {args.network}")
             print(f"Total tokens generated: {total_tokens}")
-            print(f"\n--- Final accumulated text ---")
-            # Show only the generated part (without original prompt)
-            generated = context[len(args.prompt):]
+            print(f"\n--- Final accumulated text ({len(full_output)} chars) ---")
+            # Show full output (all passes concatenated)
+            generated = full_output
             print(generated)
 
         elif args.reflection:
