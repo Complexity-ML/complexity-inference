@@ -194,6 +194,12 @@ def generate_main():
         help="Repetition penalty (default: 1.1)",
     )
     parser.add_argument(
+        "--repetition-window",
+        type=int,
+        default=0,
+        help="Only penalize last N tokens (0=all, 256=sliding window)",
+    )
+    parser.add_argument(
         "--device",
         default="cuda",
         help="Device (default: cuda)",
@@ -267,6 +273,7 @@ def generate_main():
         top_p=args.top_p,
         top_k=args.top_k,
         repetition_penalty=args.repetition_penalty,
+        repetition_window=args.repetition_window,
     )
 
     # Create engine
@@ -291,6 +298,7 @@ def generate_main():
                 top_p=args.top_p,
                 top_k=args.top_k,
                 repetition_penalty=args.repetition_penalty,
+                repetition_window=args.repetition_window,
             )
 
             # Start with original prompt

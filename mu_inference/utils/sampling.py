@@ -24,6 +24,7 @@ def prepare_logits(
     top_p: float = 1.0,
     repetition_penalty: float = 1.0,
     past_tokens: Optional[List[int]] = None,
+    repetition_window: int = 0,
 ) -> torch.Tensor:
     """
     Prepare logits for sampling.
@@ -37,6 +38,7 @@ def prepare_logits(
         top_p: Keep tokens with cumulative prob <= top_p
         repetition_penalty: Penalize repeated tokens (>1 = less repetition)
         past_tokens: List of previously generated tokens
+        repetition_window: Only consider last N tokens (0 = all)
 
     Returns:
         Processed logits
@@ -45,7 +47,12 @@ def prepare_logits(
 
     # Apply repetition penalty
     if repetition_penalty != 1.0 and past_tokens:
-        for token_id in set(past_tokens):
+        # Apply window if specified
+        tokens_to_check = past_tokens
+        if repetition_window > 0:
+            tokens_to_check = past_tokens[-repetition_window:]
+
+        for token_id in set(tokens_to_check):
             if token_id < logits.shape[-1]:
                 if logits[0, token_id] > 0:
                     logits[0, token_id] /= repetition_penalty
