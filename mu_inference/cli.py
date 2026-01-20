@@ -323,12 +323,10 @@ def generate_main():
                 if len(context) > max_chars:
                     context = context[-max_chars:]
 
-                # Clear CUDA cache every 50 passes to prevent fragmentation
-                if i > 0 and i % 50 == 0:
-                    import torch
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                        print(f"[CUDA cache cleared]")
+                # Clear KV cache every 10 passes to prevent OOM
+                if i > 0 and i % 10 == 0:
+                    engine.clear_cache()
+                    print(f"[KV cache cleared]")
 
                 if args.stream:
                     pass_text = ""

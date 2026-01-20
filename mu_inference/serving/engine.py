@@ -405,6 +405,14 @@ class MuEngine:
             },
         }
 
+    def clear_cache(self) -> None:
+        """Clear the KV cache to free GPU memory."""
+        if self.worker and self.worker.cache:
+            self.worker.cache.clear()
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     async def shutdown(self) -> None:
         """Shutdown the engine."""
         logger.info("Shutting down Mu Engine...")
