@@ -252,7 +252,7 @@ def generate_main():
     async def run():
         await engine.initialize(args.model)
 
-        print(f"\nPrompt: {args.prompt}\n")
+        print(f'\nPrompt: "{args.prompt}"\n')
         print("=" * 50)
         print("Generated:")
 
