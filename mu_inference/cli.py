@@ -215,6 +215,17 @@ def generate_main():
         default=False,
         help="Enable Mu clamping (only for models trained with mu_clamp)",
     )
+    parser.add_argument(
+        "--reflection",
+        action="store_true",
+        help="Enable reflection mode (reasoning -> answer loop)",
+    )
+    parser.add_argument(
+        "--thinking-tokens",
+        type=int,
+        default=200,
+        help="Max tokens for reasoning phase (default: 200)",
+    )
 
     args = parser.parse_args()
 
@@ -254,24 +265,86 @@ def generate_main():
 
         print(f"\nPrompt: {args.prompt}\n")
         print("=" * 50)
-        print("Generated:")
 
-        if args.stream:
-            async for chunk in engine.generate_stream(
-                prompt=args.prompt,
-                sampling_params=sampling_params,
-            ):
-                print(chunk.text, end="", flush=True)
-            print()
-        else:
-            output = await engine.generate(
-                prompt=args.prompt,
-                sampling_params=sampling_params,
+        if args.reflection:
+            # === REFLECTION MODE ===
+            # Phase 1: Reasoning
+            print("Phase 1: Thinking...")
+            reasoning_params = SamplingParams(
+                max_tokens=args.thinking_tokens,
+                temperature=0.5,  # Focused reasoning
+                top_k=40,
+                repetition_penalty=args.repetition_penalty,
             )
-            print(output.text)
+
+            reasoning_prompt = f"{args.prompt}\n\nLet me think step by step:"
+
+            if args.stream:
+                reasoning_text = ""
+                async for chunk in engine.generate_stream(
+                    prompt=reasoning_prompt,
+                    sampling_params=reasoning_params,
+                ):
+                    print(chunk.text, end="", flush=True)
+                    reasoning_text += chunk.text
+                print("\n")
+                reasoning_tokens = len(reasoning_text.split())  # Approximate
+            else:
+                reasoning = await engine.generate(
+                    prompt=reasoning_prompt,
+                    sampling_params=reasoning_params,
+                )
+                reasoning_text = reasoning.text
+                reasoning_tokens = reasoning.usage["completion_tokens"]
+                print(f"{reasoning_text}\n")
+
+            # Phase 2: Answer
+            print("Phase 2: Answering...")
+            answer_prompt = f"{args.prompt}\n\nLet me think step by step:{reasoning_text}\n\nTherefore, my answer is:"
+
+            if args.stream:
+                answer_text = ""
+                async for chunk in engine.generate_stream(
+                    prompt=answer_prompt,
+                    sampling_params=sampling_params,
+                ):
+                    print(chunk.text, end="", flush=True)
+                    answer_text += chunk.text
+                print()
+                answer_tokens = len(answer_text.split())  # Approximate
+            else:
+                answer = await engine.generate(
+                    prompt=answer_prompt,
+                    sampling_params=sampling_params,
+                )
+                print(answer.text)
+                answer_tokens = answer.usage["completion_tokens"]
+
             print("=" * 50)
-            print(f"Tokens: {output.usage['completion_tokens']}")
-            print(f"Finish reason: {output.finish_reason}")
+            print(f"Reasoning tokens: {reasoning_tokens}")
+            print(f"Answer tokens: {answer_tokens}")
+            print(f"Total tokens: {reasoning_tokens + answer_tokens}")
+
+        else:
+            # === NORMAL MODE ===
+            print("Generated:")
+
+            if args.stream:
+                async for chunk in engine.generate_stream(
+                    prompt=args.prompt,
+                    sampling_params=sampling_params,
+                ):
+                    print(chunk.text, end="", flush=True)
+                print()
+            else:
+                output = await engine.generate(
+                    prompt=args.prompt,
+                    sampling_params=sampling_params,
+                )
+                print(output.text)
+                print("=" * 50)
+                print(f"Tokens: {output.usage['completion_tokens']}")
+                print(f"Finish reason: {output.finish_reason}")
 
         await engine.shutdown()
 
